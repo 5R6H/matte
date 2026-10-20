@@ -1,0 +1,563 @@
+﻿<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None" ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True" Background="Transparent" Width="320" SizeToContent="Height"
+        Foreground="{DynamicResource Ink}" FontFamily="Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI" FontSize="13" UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Ideal" TextOptions.TextRenderingMode="Grayscale">
+ <Window.Resources>
+  <!-- Colours: these are the ambient (photo) style's; the simple style swaps them for the system theme's (PanelStyle in PanelUI.cs). -->
+  <SolidColorBrush x:Key="Ink" Color="White"/>
+  <SolidColorBrush x:Key="PrimaryBg" Color="White"/>
+  <SolidColorBrush x:Key="PrimaryHover" Color="#EFEDEB"/>
+  <SolidColorBrush x:Key="Edge" Color="#59FFFFFF"/>
+  <SolidColorBrush x:Key="Fill" Color="#1CFFFFFF"/>
+  <SolidColorBrush x:Key="FillHover" Color="#2EFFFFFF"/>
+  <SolidColorBrush x:Key="FillPress" Color="#42FFFFFF"/>
+  <SolidColorBrush x:Key="Ink2" Color="#ADFFFFFF"/>
+  <SolidColorBrush x:Key="Ink3" Color="#70FFFFFF"/>
+  <SolidColorBrush x:Key="Hair" Color="#24FFFFFF"/>
+  <SolidColorBrush x:Key="Danger" Color="#FFB0B0"/>
+  <SolidColorBrush x:Key="Mint" Color="#8FE3BC"/>
+  <SolidColorBrush x:Key="Tone" Color="#2A2522"/>
+
+  <!-- Capsule / rounded button: fill lightens on hover, darkens a touch and shrinks on press. -->
+  <Style x:Key="Pill" TargetType="Button">
+   <Setter Property="Foreground" Value="{DynamicResource Ink}"/><Setter Property="Background" Value="{DynamicResource Fill}"/><Setter Property="Height" Value="36"/>
+   <Setter Property="Cursor" Value="Hand"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/><Setter Property="RenderTransformOrigin" Value=".5,.5"/>
+   <Setter Property="RenderTransform"><Setter.Value><ScaleTransform/></Setter.Value></Setter>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+    <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="9"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="{DynamicResource FillHover}"/></Trigger>
+     <Trigger Property="IsPressed" Value="True"><Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX=".96" ScaleY=".96"/></Setter.Value></Setter></Trigger>
+     <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value=".35"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource Pill}">
+   <!-- Tone: the photo's deep colour (set and animated from code), so white buttons are not plain black-on-white -->
+   <Setter Property="Background" Value="{DynamicResource PrimaryBg}"/><Setter Property="Foreground" Value="{DynamicResource Tone}"/><Setter Property="FontWeight" Value="SemiBold"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+    <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="9"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="{DynamicResource PrimaryHover}"/></Trigger>
+     <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value=".35"/></Trigger>
+     <Trigger Property="IsPressed" Value="True"><Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX=".96" ScaleY=".96"/></Setter.Value></Setter></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="Row" TargetType="Button">
+   <Setter Property="Foreground" Value="{DynamicResource Ink}"/><Setter Property="Height" Value="40"/><Setter Property="Cursor" Value="Hand"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+   <Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="FontSize" Value="13.5"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+    <Border x:Name="b" Background="Transparent" CornerRadius="7" Padding="12,0"><ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Stretch"/></Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="{DynamicResource Fill}"/></Trigger>
+     <Trigger Property="IsPressed" Value="True"><Setter TargetName="b" Property="Background" Value="{DynamicResource FillPress}"/></Trigger>
+     <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value=".4"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="Round" TargetType="Button" BasedOn="{StaticResource Pill}">
+   <Setter Property="Width" Value="32"/><Setter Property="Height" Value="32"/><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+    <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="16"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsEnabled" Value="False"><Setter TargetName="b" Property="Opacity" Value=".32"/></Trigger>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="{DynamicResource FillHover}"/></Trigger>
+     <Trigger Property="IsPressed" Value="True"><Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX=".92" ScaleY=".92"/></Setter.Value></Setter></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <!-- a round button that keeps its own fill on hover (删除 armed: red) -->
+  <Style x:Key="RoundSolid" TargetType="Button" BasedOn="{StaticResource Round}">
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+    <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="16"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Opacity" Value=".88"/></Trigger>
+     <Trigger Property="IsPressed" Value="True"><Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX=".92" ScaleY=".92"/></Setter.Value></Setter></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="Bare" TargetType="Button">
+   <Setter Property="Cursor" Value="Hand"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border Background="Transparent"><ContentPresenter/></Border></ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <!-- Segmented choice (settings page): the chosen one is filled like the primary button. -->
+  <Style x:Key="Seg" TargetType="Button">
+   <Setter Property="Foreground" Value="{DynamicResource Ink2}"/><Setter Property="Background" Value="Transparent"/><Setter Property="Height" Value="30"/>
+   <Setter Property="Cursor" Value="Hand"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/><Setter Property="FontSize" Value="12.5"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+    <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="7"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+    <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="{DynamicResource Ink}"/></Trigger></ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="SegOn" TargetType="Button" BasedOn="{StaticResource Seg}">
+   <Setter Property="Background" Value="{DynamicResource PrimaryBg}"/><Setter Property="Foreground" Value="{DynamicResource Tone}"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+    <Border Background="{TemplateBinding Background}" CornerRadius="7"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <!-- Action tile (调整图片): icon over a short label -->
+  <Style x:Key="Tile" TargetType="Button" BasedOn="{StaticResource Pill}">
+   <Setter Property="Height" Value="62"/><Setter Property="FontSize" Value="11.5"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+    <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="10"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="{DynamicResource FillHover}"/></Trigger>
+     <Trigger Property="IsPressed" Value="True"><Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX=".95" ScaleY=".95"/></Setter.Value></Setter></Trigger>
+     <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value=".4"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="Label" TargetType="TextBlock"><Setter Property="FontSize" Value="11.5"/><Setter Property="Foreground" Value="{DynamicResource Ink3}"/><Setter Property="Margin" Value="2,0,0,6"/></Style>
+  <Style TargetType="TextBlock"><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+ </Window.Resources>
+
+ <Grid x:Name="Root" ClipToBounds="True">
+  <!-- ================= menu page ================= -->
+  <StackPanel x:Name="MenuPage" Margin="8">
+   <StackPanel.RenderTransform><TranslateTransform/></StackPanel.RenderTransform>
+
+   <!-- private: current wallpaper -->
+   <StackPanel x:Name="MenuTop">
+    <!-- the card is also the way to the playlist: on hover it lights up as a panel, with a chevron at its right -->
+    <Border x:Name="CardHit" Margin="0,0,0,3" Padding="8" CornerRadius="10" Background="Transparent" Cursor="Hand">
+    <Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <!-- on hover the card shows it plays a list: the next photos rise behind the cover, like the playlist's stacks -->
+     <Grid Width="66" Height="66">
+      <Border x:Name="CoverBack2" CornerRadius="7" BorderBrush="#8CFFFFFF" BorderThickness=".8" Opacity="0" RenderTransformOrigin=".5,1">
+       <Border.RenderTransform><TransformGroup><ScaleTransform/><TranslateTransform/></TransformGroup></Border.RenderTransform></Border>
+      <Border x:Name="CoverBack1" CornerRadius="7" BorderBrush="#8CFFFFFF" BorderThickness=".8" Opacity="0" RenderTransformOrigin=".5,1">
+       <Border.RenderTransform><TransformGroup><ScaleTransform/><TranslateTransform/></TransformGroup></Border.RenderTransform></Border>
+     <Border x:Name="CoverFront" Width="66" Height="66" CornerRadius="7" Background="{DynamicResource Fill}" RenderTransformOrigin=".5,1">
+      <Border.RenderTransform><ScaleTransform/></Border.RenderTransform>
+      <Border.Clip><RectangleGeometry x:Name="CoverClip" Rect="0,0,66,66" RadiusX="7" RadiusY="7"/></Border.Clip>
+      <Grid><Image x:Name="Cover" Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality"/><Image x:Name="CoverB" Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality" Opacity="0"/>
+       <!-- the stack's hairline, on the cover only while the stack is out -->
+       <Border x:Name="CoverLine" CornerRadius="7" BorderBrush="#8CFFFFFF" BorderThickness=".8" Opacity="0"/></Grid>
+     </Border>
+     </Grid>
+     <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+      <TextBlock x:Name="WallName" FontSize="14.5" FontWeight="SemiBold"/>
+      <!-- the folder the photo comes from, then the time to the next one -->
+      <StackPanel Orientation="Horizontal" Margin="0,2,0,0"><ContentControl x:Name="WallFolderIcon" Width="12" Height="12" Margin="0,0,5,0" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/><TextBlock x:Name="WallFolder" FontSize="12" MaxWidth="160" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/></StackPanel>
+      <!-- whether this photo can show in Spatial 3D (an up-to-date Spatial file) · the time to the next photo; the time
+           last, since its length changes as it counts -->
+      <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+       <StackPanel x:Name="SpatialBadge" Orientation="Horizontal" VerticalAlignment="Center">
+        <Border x:Name="SpatialBadgeBox" CornerRadius="4" Padding="5,0,5,1" BorderThickness="1" VerticalAlignment="Center"><TextBlock x:Name="SpatialBadgeText" FontSize="10.5" FontWeight="SemiBold"/></Border>
+        <TextBlock x:Name="SpatialBadgeDot" Text="·" FontSize="12" Foreground="{DynamicResource Ink3}" Margin="6,0" VerticalAlignment="Center"/></StackPanel>
+       <TextBlock x:Name="Countdown" FontSize="12" Foreground="{DynamicResource Ink3}" VerticalAlignment="Center"/>
+      </StackPanel>
+      <!-- empty playlist: straight to it -->
+      <Button x:Name="EmptyAddBtn" Style="{StaticResource Primary}" Height="28" HorizontalAlignment="Left" Padding="0" Margin="0,6,0,0" Visibility="Collapsed"><TextBlock Text="添加图片" Margin="14,0" FontSize="12.5"/></Button>
+      <!-- the lengths, opened from the timer button in the play row -->
+      <Popup x:Name="IntervalPopup" PlacementTarget="{Binding ElementName=TimerBtn}" Placement="Bottom" VerticalOffset="6" HorizontalOffset="-60" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
+       <!-- the panel's own material: its ambience (lined up with the panel behind, set on opening) under the same dim,
+            a little lighter so it reads as lifted; in the simple style the system surface -->
+       <Border x:Name="IntervalPopupBox" CornerRadius="10" Margin="0,0,12,12" MinWidth="128" BorderBrush="{DynamicResource Edge}" BorderThickness=".5">
+        <Border.Effect><DropShadowEffect BlurRadius="18" ShadowDepth="4" Direction="270" Opacity=".35"/></Border.Effect>
+        <Grid>
+         <Border x:Name="IntervalPopupTint" CornerRadius="10"/><Border x:Name="IntervalPopupLift" CornerRadius="10"/>
+         <StackPanel Margin="5"><TextBlock Text="每张停留" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="9,4,0,4"/><StackPanel x:Name="IntervalList"/></StackPanel>
+        </Grid>
+       </Border>
+      </Popup>
+     </StackPanel>
+     <ContentControl x:Name="CardChevron" Grid.Column="2" Width="14" Height="14" Margin="6,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Ink2}" Opacity="0"/>
+    </Grid>
+    </Border>
+    <!-- playback: previous photo, pause / play the slideshow, next photo -->
+    <Grid Margin="4,2,4,8">
+     <!-- icons only, as in any player (names on hover); with them the two things that shape playback: the order
+          (shuffled / in order) and how long each photo stays, the timer showing its length -->
+     <!-- like a music player: the three play buttons are the solid centre; order (left) and the timer (right) flank
+          them as light, unfilled buttons -->
+     <Grid.ColumnDefinitions><ColumnDefinition Width="54"/><ColumnDefinition Width="4"/><ColumnDefinition/><ColumnDefinition Width="5"/><ColumnDefinition/><ColumnDefinition Width="5"/><ColumnDefinition/><ColumnDefinition Width="4"/><ColumnDefinition Width="54"/></Grid.ColumnDefinitions>
+     <Button x:Name="OrderBtn" Style="{StaticResource Pill}" Background="Transparent"><ContentControl x:Name="OrderIcon" Width="17" Height="17"/></Button>
+     <Button x:Name="PrevBtn" Grid.Column="2" Style="{StaticResource Pill}" ToolTip="上一张"><ContentControl x:Name="PrevIcon" Width="17" Height="17"/></Button>
+     <Button x:Name="PlayBtn" Grid.Column="4" Style="{StaticResource Pill}" ToolTip="暂停"><ContentControl x:Name="PlayIcon" Width="17" Height="17"/></Button>
+     <Button x:Name="NextBtn" Grid.Column="6" Style="{StaticResource Pill}" ToolTip="下一张"><ContentControl x:Name="NextIcon" Width="17" Height="17"/></Button>
+     <Button x:Name="TimerBtn" Grid.Column="8" Style="{StaticResource Pill}" Background="Transparent" ToolTip="每张停留多久"><TextBlock x:Name="TimerText" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center"/></Button>
+   </Grid>
+    <Border Height="1" Background="{DynamicResource Hair}" Margin="12,5"/>
+    <!-- Spatial: a monochrome switch (no accent colour) -->
+    <Button x:Name="SpatialRow" Style="{StaticResource Row}" ToolTip="随鼠标视差的立体壁纸"><DockPanel><ContentControl x:Name="SpatialIcon" Width="16" Height="16" Margin="0,0,10,0"/>
+     <Border x:Name="SwitchTrack" DockPanel.Dock="Right" Width="34" Height="20" CornerRadius="10" VerticalAlignment="Center"><Ellipse x:Name="SwitchKnob" Width="16" Height="16" HorizontalAlignment="Left" Margin="2,0,0,0"><Ellipse.RenderTransform><TranslateTransform/></Ellipse.RenderTransform><Ellipse.Effect><DropShadowEffect BlurRadius="4" ShadowDepth="1" Direction="270" Opacity=".35"/></Ellipse.Effect></Ellipse></Border>
+     <TextBlock x:Name="SpatialNote" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource Ink3}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+     <TextBlock Text="Spatial 3D" VerticalAlignment="Center"/></DockPanel></Button>
+    <!-- 编辑图片: this photo on the desktop - its background (the swatch), turn / flip, delete -->
+    <Button x:Name="AdjustRow" Style="{StaticResource Row}"><DockPanel><ContentControl x:Name="AdjustIcon" Width="16" Height="16" Margin="0,0,10,0"/>
+     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"><Border x:Name="HexSwatch" Width="14" Height="14" CornerRadius="4.5" BorderBrush="{DynamicResource Edge}" BorderThickness=".5"/></StackPanel>
+     <TextBlock Text="编辑壁纸" VerticalAlignment="Center"/></DockPanel></Button>
+    <!-- 壁纸背景: what fills the screen around the photo, the same for every photo (also switchable on 编辑图片) -->
+    <Border Height="40" Padding="12,0" Background="Transparent" ToolTip="图片周围的背景：纯色、边缘延展，或图片本身模糊放大的氛围"><DockPanel><ContentControl x:Name="BackgroundIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+     <Border DockPanel.Dock="Right" CornerRadius="8" Background="{DynamicResource Fill}" Padding="2" VerticalAlignment="Center">
+      <UniformGrid x:Name="BackgroundSeg" Columns="3" Rows="1"><Button Style="{StaticResource Seg}" Tag="color" Content="纯色" Height="24" Width="44" ToolTip="图片周围是一种颜色"/><Button Style="{StaticResource Seg}" Tag="extend" Content="延展" Height="24" Width="44" ToolTip="图片的边缘向外延展，渐渐融进颜色"/><Button Style="{StaticResource Seg}" Tag="ambient" Content="氛围" Height="24" Width="44" ToolTip="图片本身模糊放大作背景"/></UniformGrid></Border>
+     <TextBlock Text="壁纸背景" VerticalAlignment="Center" FontSize="13.5"/></DockPanel></Border>
+   </StackPanel>
+
+   <Border Height="1" Background="{DynamicResource Hair}" Margin="12,5"/>
+   <!-- 设置 sits with 退出: both are about the app itself, the rows above are about the wallpaper -->
+    <Button x:Name="PrefsRow" Style="{StaticResource Row}"><DockPanel><ContentControl x:Name="PrefsIcon" Width="16" Height="16" Margin="0,0,10,0"/><TextBlock Text="设置" VerticalAlignment="Center"/></DockPanel></Button>
+   <Button x:Name="ExitRow" Style="{StaticResource Row}" Foreground="{DynamicResource Ink2}"><DockPanel><ContentControl x:Name="ExitIcon" Width="16" Height="16" Margin="0,0,10,0"/>
+    <TextBlock Text="退出" VerticalAlignment="Center"/></DockPanel></Button>
+  </StackPanel>
+
+  <!-- ================= settings page (设置): the app itself ================= -->
+  <!-- Collapsed until opened; then as tall as the menu page (set from code), so the panel keeps its size. -->
+  <Grid x:Name="SettingsPage" Margin="16" Visibility="Collapsed">
+   <Grid.RenderTransform><TranslateTransform/></Grid.RenderTransform>
+   <!-- the rows reach to the page's edges (hover fills), so the column is widened rather than the rows overhanging it:
+        an overhang would clip the whole column, the back button's circle with it -->
+   <StackPanel Margin="-12,0">
+    <DockPanel Margin="12,0,12,14">
+     <Button x:Name="SettingsBack" Style="{StaticResource Round}" Background="Transparent" Margin="-6,0,6,0"><ContentControl x:Name="SettingsBackIcon" Width="16" Height="16"/></Button>
+     <TextBlock Text="设置" FontSize="14.5" FontWeight="SemiBold" VerticalAlignment="Center"/>
+    </DockPanel>
+    <!-- every row as in the menu: an icon, what it does (and a line under it where it needs one); hairlines between -->
+    <!-- 面板外观: this panel's own look (not the wallpaper's) -->
+    <Border Height="44" Margin="0" Padding="12,0" Background="Transparent"><DockPanel><ContentControl x:Name="SettingsIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+     <Border DockPanel.Dock="Right" CornerRadius="8" Background="{DynamicResource Fill}" Padding="2" VerticalAlignment="Center">
+      <UniformGrid x:Name="StyleSeg" Columns="2" Rows="1"><Button Style="{StaticResource Seg}" Tag="ambient" Content="氛围" Height="24" Width="48" ToolTip="面板背后是当前图片的氛围色"/><Button Style="{StaticResource Seg}" Tag="simple" Content="系统" Height="24" Width="48" ToolTip="面板用 Windows 的浅色 / 深色"/></UniformGrid></Border>
+     <TextBlock Text="面板外观" VerticalAlignment="Center" FontSize="13.5"/></DockPanel></Border>
+    <Border Height="1" Background="{DynamicResource Hair}" Margin="12,6"/>
+    <Button x:Name="BatteryRow" Style="{StaticResource Row}" Height="56" Margin="0"><DockPanel><ContentControl x:Name="BatteryIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+     <Border x:Name="BatteryTrack" DockPanel.Dock="Right" Width="34" Height="20" CornerRadius="10" VerticalAlignment="Center"><Ellipse x:Name="BatteryKnob" Width="16" Height="16" HorizontalAlignment="Left" Margin="2,0,0,0"><Ellipse.Effect><DropShadowEffect BlurRadius="4" ShadowDepth="1" Direction="270" Opacity=".35"/></Ellipse.Effect></Ellipse></Border>
+     <StackPanel VerticalAlignment="Center"><TextBlock Text="用电池时显示普通照片"/><TextBlock FontSize="11.5" Foreground="{DynamicResource Ink3}" Text="不显示 3D，更省电 · 节能模式下总是如此" Margin="0,1,0,0"/></StackPanel></DockPanel></Button>
+    <Border Height="1" Background="{DynamicResource Hair}" Margin="12,6"/>
+    <Button x:Name="StartupRow" Style="{StaticResource Row}" Height="56" Margin="0"><DockPanel><ContentControl x:Name="StartupIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+     <Border x:Name="StartupTrack" DockPanel.Dock="Right" Width="34" Height="20" CornerRadius="10" VerticalAlignment="Center"><Ellipse x:Name="StartupKnob" Width="16" Height="16" HorizontalAlignment="Left" Margin="2,0,0,0"><Ellipse.Effect><DropShadowEffect BlurRadius="4" ShadowDepth="1" Direction="270" Opacity=".35"/></Ellipse.Effect></Ellipse></Border>
+     <TextBlock Text="开机时启动 Matte" VerticalAlignment="Center"/></DockPanel></Button>
+   </StackPanel>
+  </Grid>
+
+  <!-- ================= Spatial page ================= -->
+  <Grid x:Name="SpatialPage" Margin="16" Visibility="Collapsed">
+   <Grid.RenderTransform><TranslateTransform/></Grid.RenderTransform>
+   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+   <!-- the title with what Spatial is doing now, and its switch -->
+   <DockPanel Margin="0,0,0,14">
+    <Button x:Name="SpatialBack" Style="{StaticResource Round}" Background="Transparent" Margin="-6,0,6,0"><ContentControl x:Name="SpatialBackIcon" Width="16" Height="16"/></Button>
+    <Border x:Name="SpatialOnTrack" DockPanel.Dock="Right" Width="34" Height="20" CornerRadius="10" VerticalAlignment="Center" Cursor="Hand" ToolTip="开 / 关立体壁纸"><Ellipse x:Name="SpatialOnKnob" Width="16" Height="16" HorizontalAlignment="Left" Margin="2,0,0,0"><Ellipse.Effect><DropShadowEffect BlurRadius="4" ShadowDepth="1" Direction="270" Opacity=".35"/></Ellipse.Effect></Ellipse></Border>
+    <StackPanel VerticalAlignment="Center"><TextBlock Text="Spatial 3D" FontSize="14.5" FontWeight="SemiBold"/><TextBlock x:Name="SpatialState" FontSize="12" Foreground="{DynamicResource Ink2}"/></StackPanel>
+   </DockPanel>
+   <!-- the camera -->
+   <StackPanel x:Name="MotionBox" Grid.Row="1" Margin="0,0,0,0">
+    <TextBlock Style="{StaticResource Label}" Text="镜头"/>
+    <!-- the camera: the way it moves (one segmented choice), then that way's kind as a labelled row, the same pattern as
+         the menu's 壁纸背景 row; the row's text says what the chosen kind does -->
+    <Border CornerRadius="8" Background="{DynamicResource Fill}" Padding="2">
+     <UniformGrid x:Name="MotionSeg" Columns="2" Rows="1">
+      <Button Style="{StaticResource Seg}" Tag="mouse" Content="跟随鼠标" Height="28"/>
+      <Button Style="{StaticResource Seg}" Tag="auto" Content="自动" Height="28"/>
+     </UniformGrid>
+    </Border>
+    <DockPanel Margin="2,10,0,0">
+     <Border DockPanel.Dock="Right" CornerRadius="8" Background="{DynamicResource Fill}" Padding="2" VerticalAlignment="Center">
+      <UniformGrid x:Name="MotionSubSeg" Columns="2" Rows="1">
+       <Button Style="{StaticResource Seg}" Tag="0" Height="24" Width="48"/><Button Style="{StaticResource Seg}" Tag="1" Height="24" Width="48"/>
+      </UniformGrid>
+     </Border>
+     <TextBlock x:Name="MotionHint" FontSize="12" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/>
+    </DockPanel>
+   </StackPanel>
+   <!-- Spatial 图片: a section like 镜头 (a label; its rows carry icons, as rows do everywhere in the panel): making them
+        (how far the list is: count, bar, what is left or being made) and where they are kept; each opens its own page -->
+   <StackPanel Grid.Row="2">
+    <Border Height="1" Background="{DynamicResource Hair}" Margin="0,16,0,12"/>
+    <TextBlock Style="{StaticResource Label}" Text="Spatial 图片"/>
+   </StackPanel>
+   <StackPanel Grid.Row="3" Margin="-12,0">
+   <Button x:Name="GenRow" Style="{StaticResource Row}" Height="66">
+    <DockPanel>
+     <ContentControl x:Name="GenRowIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+     <ContentControl x:Name="GenRowChevron" DockPanel.Dock="Right" Width="14" Height="14" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Ink2}"/>
+     <StackPanel VerticalAlignment="Center">
+      <DockPanel><TextBlock x:Name="GenSummaryCount" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/><TextBlock Text="生成 Spatial 图片" VerticalAlignment="Center"/></DockPanel>
+      <Grid x:Name="GenSummaryBar" Height="3" Margin="0,8,0,0">
+       <Grid.ColumnDefinitions><ColumnDefinition Width="0*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
+       <Border Grid.ColumnSpan="2" CornerRadius="1.5" Background="{DynamicResource FillHover}"/>
+       <Border x:Name="GenSummaryFill" CornerRadius="1.5" Background="{DynamicResource Ink}"/>
+      </Grid>
+      <TextBlock x:Name="GenSummaryNote" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,6,0,0"/>
+     </StackPanel>
+    </DockPanel>
+   </Button>
+   <Button x:Name="StoreRow" Style="{StaticResource Row}" Height="44" Margin="0,2,0,0">
+    <DockPanel>
+     <ContentControl x:Name="StoreRowIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+     <ContentControl x:Name="StoreRowChevron" DockPanel.Dock="Right" Width="14" Height="14" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Ink2}"/>
+     <TextBlock x:Name="StoreRowSize" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/>
+     <TextBlock Text="存储与清理" VerticalAlignment="Center"/>
+    </DockPanel>
+   </Button>
+   </StackPanel>
+  </Grid>
+
+  <!-- ================= Spatial 图片 page (from the Spatial page): which entries get Spatial pictures made ================= -->
+  <Grid x:Name="SpatialFilesPage" Margin="16" Visibility="Collapsed">
+   <Grid.RenderTransform><TranslateTransform/></Grid.RenderTransform>
+   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+   <DockPanel Margin="0,0,0,12">
+    <Button x:Name="SpatialFilesBack" Style="{StaticResource Round}" Background="Transparent" Margin="-6,0,6,0"><ContentControl x:Name="SpatialFilesBackIcon" Width="16" Height="16"/></Button>
+    <StackPanel VerticalAlignment="Center"><TextBlock Text="Spatial 图片" FontSize="14.5" FontWeight="SemiBold"/><TextBlock x:Name="GenCounts" FontSize="12" Foreground="{DynamicResource Ink2}"/></StackPanel>
+   </DockPanel>
+   <!-- per playlist entry: tick (made by 生成, or left out), name, how much has pictures, count -->
+   <Border Grid.Row="1" CornerRadius="11" Background="{DynamicResource Fill}" Padding="3">
+    <ScrollViewer VerticalScrollBarVisibility="Hidden" Focusable="False"><StackPanel x:Name="GenList"/></ScrollViewer>
+   </Border>
+   <StackPanel Grid.Row="2">
+    <!-- what 生成 will take on disk, from the Spatial files already made -->
+    <TextBlock x:Name="GenSize" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="2,8,0,0" Visibility="Collapsed"/>
+    <TextBlock x:Name="GenNote" FontSize="11.5" Foreground="{DynamicResource Danger}" TextWrapping="Wrap" TextTrimming="None" Margin="2,8,0,0" Visibility="Collapsed"/>
+   </StackPanel>
+   <Grid Grid.Row="3" Margin="0,10,0,0">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+    <!-- just the photo on screen (when it has none) -->
+    <Button x:Name="GenOneBtn" Style="{StaticResource Pill}" ToolTip="只为桌面上这张生成 Spatial 图片"><TextBlock Text="仅当前这张" Margin="12,0" FontSize="12.5"/></Button>
+    <Border x:Name="GenOneGap" Grid.Column="1" Width="8"/>
+    <Button x:Name="GenBtn" Grid.Column="2" Style="{StaticResource Primary}" Content="生成 Spatial 图片"/>
+   </Grid>
+  </Grid>
+  <!-- ================= Spatial storage page (from the Spatial page): where the Spatial pictures are, and clearing out ================= -->
+  <Grid x:Name="SpatialStorePage" Margin="16" Visibility="Collapsed">
+   <Grid.RenderTransform><TranslateTransform/></Grid.RenderTransform>
+   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+   <DockPanel Margin="0,0,0,12">
+    <Button x:Name="SpatialStoreBack" Style="{StaticResource Round}" Background="Transparent" Margin="-6,0,6,0"><ContentControl x:Name="SpatialStoreBackIcon" Width="16" Height="16"/></Button>
+    <StackPanel VerticalAlignment="Center"><TextBlock Text="存储与清理" FontSize="14.5" FontWeight="SemiBold"/><TextBlock x:Name="StoreTotal" FontSize="12" Foreground="{DynamicResource Ink2}"/></StackPanel>
+   </DockPanel>
+   <!-- rows as in 设置: an icon, what it is (a line under it), its actions at the right; hairlines between. They scroll
+        if the page is short (the default-location and old-copy rows come and go). -->
+   <ScrollViewer Grid.Row="1" Grid.RowSpan="2" VerticalScrollBarVisibility="Hidden" Focusable="False" Margin="-12,0">
+   <StackPanel>
+    <Border Height="56" Padding="12,0"><DockPanel><ContentControl x:Name="StoreFolderIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+      <Button x:Name="StoreOpenBtn" Style="{StaticResource Pill}" Height="28" ToolTip="在资源管理器中打开"><TextBlock Text="打开" Margin="11,0" FontSize="12.5"/></Button>
+      <Button x:Name="StoreMoveBtn" Style="{StaticResource Pill}" Height="28" Margin="6,0,0,0" ToolTip="把 Spatial 图片移到别的文件夹（比如另一个磁盘）"><TextBlock Text="移动…" Margin="11,0" FontSize="12.5"/></Button>
+     </StackPanel>
+     <StackPanel VerticalAlignment="Center"><TextBlock Text="位置"/><TextBlock x:Name="StorePath" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,1,0,0"/></StackPanel></DockPanel></Border>
+    <!-- while moving, or what went wrong -->
+    <Border x:Name="StoreMoveBox" Padding="38,0,12,6" Visibility="Collapsed"><StackPanel>
+     <TextBlock x:Name="StoreMoveNote" FontSize="11.5" Foreground="{DynamicResource Ink2}" TextWrapping="Wrap" TextTrimming="None"/>
+     <Grid x:Name="StoreMoveBar" Height="3" Margin="0,6,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="0*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
+      <Border Grid.ColumnSpan="2" CornerRadius="1.5" Background="{DynamicResource FillHover}"/><Border CornerRadius="1.5" Background="{DynamicResource Ink}"/></Grid>
+    </StackPanel></Border>
+    <!-- moved away: the way back -->
+    <Border x:Name="StoreBackRow" Height="48" Padding="38,0,12,0" Visibility="Collapsed"><DockPanel>
+     <Button x:Name="StoreBackBtn" DockPanel.Dock="Right" Style="{StaticResource Pill}" Height="28" VerticalAlignment="Center"><TextBlock Text="移回" Margin="11,0" FontSize="12.5"/></Button>
+     <StackPanel VerticalAlignment="Center"><TextBlock Text="移回默认位置" FontSize="12.5"/><TextBlock x:Name="StoreDefaultPath" FontSize="11.5" Foreground="{DynamicResource Ink3}"/></StackPanel></DockPanel></Border>
+    <Border Height="1" Background="{DynamicResource Hair}" Margin="12,6"/>
+    <!-- tidying is automatic (SpatialIndex): what it does, and what the last check found -->
+    <Border Padding="12,8"><DockPanel><ContentControl x:Name="StoreAutoIcon" Width="16" Height="16" Margin="0,2,10,0" VerticalAlignment="Top"/>
+     <StackPanel><TextBlock Text="自动整理"/><TextBlock x:Name="StoreAutoInfo" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,2,0,0" TextWrapping="Wrap" TextTrimming="None" LineHeight="17"/></StackPanel></DockPanel></Border>    <!-- after a move: the old copy, kept until cleared here -->
+    <StackPanel x:Name="StoreOldBox" Visibility="Collapsed">
+     <Border Height="1" Background="{DynamicResource Hair}" Margin="12,6"/>
+     <Border Height="56" Padding="12,0"><DockPanel><ContentControl x:Name="StoreOldIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+      <Button x:Name="StoreOldBtn" DockPanel.Dock="Right" Style="{StaticResource Pill}" Height="28" VerticalAlignment="Center"><TextBlock x:Name="StoreOldBtnText" Text="清理" Margin="12,0" FontSize="12.5"/></Button>
+      <StackPanel VerticalAlignment="Center"><TextBlock Text="旧位置留下的副本"/><TextBlock x:Name="StoreOldInfo" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,1,0,0"/></StackPanel></DockPanel></Border>
+    </StackPanel>
+    <!-- SHARP, the generator Matte installs (SharpSetup.cs): its edition and size and 管理, or 安装… -->
+    <Border Height="1" Background="{DynamicResource Hair}" Margin="12,6"/>
+    <Border Height="56" Padding="12,0"><DockPanel><ContentControl x:Name="StoreSharpIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+     <Button x:Name="StoreSharpBtn" DockPanel.Dock="Right" Style="{StaticResource Pill}" Height="28" VerticalAlignment="Center"><TextBlock x:Name="StoreSharpBtnText" Text="移除" Margin="12,0" FontSize="12.5"/></Button>
+     <StackPanel VerticalAlignment="Center"><TextBlock Text="SHARP"/><TextBlock x:Name="StoreSharpInfo" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,1,0,0"/></StackPanel></DockPanel></Border>
+   </StackPanel>
+   </ScrollViewer>  </Grid>
+
+  <!-- ================= 安装 SHARP (from 生成 Spatial 图片 or 存储与清理): one page in four states, SharpPage.cs:
+       the computer check, Apple's license, the install's progress, ready ================= -->
+  <Grid x:Name="SharpPage" Margin="16" Visibility="Collapsed">
+   <Grid.RenderTransform><TranslateTransform/></Grid.RenderTransform>
+   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+   <DockPanel Margin="0,0,0,12">
+    <Button x:Name="SharpBack" Style="{StaticResource Round}" Background="Transparent" Margin="-6,0,6,0" VerticalAlignment="Top"><ContentControl x:Name="SharpBackIcon" Width="16" Height="16"/></Button>
+    <StackPanel VerticalAlignment="Center"><TextBlock x:Name="SharpTitle" Text="安装 SHARP" FontSize="14.5" FontWeight="SemiBold"/><TextBlock x:Name="SharpSub" FontSize="12" Foreground="{DynamicResource Ink2}" TextWrapping="Wrap" TextTrimming="None"/></StackPanel>
+   </DockPanel>
+   <StackPanel Grid.Row="1" Margin="-12,0">
+    <!-- the check: only what can fall short; 显卡加速 only with a card that can do it -->
+    <StackPanel x:Name="SharpCheckBox">
+     <Border Height="40" Padding="12,0"><DockPanel><ContentControl x:Name="SharpDiskIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+      <TextBlock x:Name="SharpDiskValue" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/><TextBlock Text="磁盘空间" VerticalAlignment="Center"/></DockPanel></Border>
+     <Border Height="40" Padding="12,0"><DockPanel><ContentControl x:Name="SharpRamIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+      <TextBlock x:Name="SharpRamValue" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/><TextBlock Text="内存" VerticalAlignment="Center"/></DockPanel></Border>
+     <StackPanel x:Name="SharpGpuBox">
+      <Border Height="1" Background="{DynamicResource Hair}" Margin="12,6"/>
+      <Button x:Name="SharpGpuRow" Style="{StaticResource Row}" Height="56"><DockPanel><ContentControl x:Name="SharpGpuIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+       <Border x:Name="SharpGpuTrack" DockPanel.Dock="Right" Width="34" Height="20" CornerRadius="10" VerticalAlignment="Center"><Ellipse x:Name="SharpGpuKnob" Width="16" Height="16" HorizontalAlignment="Left" Margin="2,0,0,0"><Ellipse.Effect><DropShadowEffect BlurRadius="4" ShadowDepth="1" Direction="270" Opacity=".35"/></Ellipse.Effect></Ellipse></Border>
+       <StackPanel VerticalAlignment="Center"><TextBlock Text="显卡加速"/><TextBlock x:Name="SharpGpuInfo" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,1,0,0"/></StackPanel></DockPanel></Button>
+     </StackPanel>
+    </StackPanel>
+    <!-- Apple's license: two sentences, the full text, the tick that unlocks 同意并下载 -->
+    <StackPanel x:Name="SharpLicenseBox">
+     <TextBlock Text="SHARP 模型只许可用于非商业研究。Matte 不附带模型，同意后从 Apple 直接下载，是否符合许可由你判断。" FontSize="12.5" Foreground="{DynamicResource Ink2}" TextWrapping="Wrap" TextTrimming="None" LineHeight="19" Margin="12,0,12,8"/>
+     <Button x:Name="SharpReadRow" Style="{StaticResource Row}" Height="40"><DockPanel><ContentControl x:Name="SharpReadIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/><TextBlock Text="阅读许可证全文" VerticalAlignment="Center"/></DockPanel></Button>
+     <Border Height="1" Background="{DynamicResource Hair}" Margin="12,6"/>
+     <Button x:Name="SharpAgreeRow" Style="{StaticResource Row}" Height="40"><DockPanel>
+      <Grid Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"><Border x:Name="SharpAgreeBox" CornerRadius="4" BorderThickness="1.4"/><ContentControl x:Name="SharpAgreeTick" Width="11" Height="11"/></Grid>
+      <TextBlock Text="我已阅读并同意" VerticalAlignment="Center"/></DockPanel></Button>
+    </StackPanel>
+    <!-- an installed SHARP: its edition (CPU / 显卡, switchable), where it is; 移除 is the left button -->
+    <StackPanel x:Name="SharpManageBox">
+     <Border Height="44" Padding="12,0"><DockPanel><ContentControl x:Name="SharpEditionIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+      <Border DockPanel.Dock="Right" CornerRadius="8" Background="{DynamicResource Fill}" Padding="2" VerticalAlignment="Center">
+       <UniformGrid x:Name="SharpEditionSeg" Columns="2" Rows="1"><Button Style="{StaticResource Seg}" Tag="cpu" Content="CPU 版" Height="24" Width="58"/><Button Style="{StaticResource Seg}" Tag="gpu" Content="显卡版" Height="24" Width="58"/></UniformGrid></Border>
+      <TextBlock Text="版本" VerticalAlignment="Center"/></DockPanel></Border>
+     <TextBlock x:Name="SharpEditionNote" FontSize="11.5" Foreground="{DynamicResource Ink3}" TextWrapping="Wrap" TextTrimming="None" Margin="38,0,12,0"/>
+     <Border Height="1" Background="{DynamicResource Hair}" Margin="12,10,12,6"/>
+     <Border Height="56" Padding="12,0"><DockPanel><ContentControl x:Name="SharpWhereIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+      <Button x:Name="SharpOpenBtn" DockPanel.Dock="Right" Style="{StaticResource Pill}" Height="28" VerticalAlignment="Center" ToolTip="在资源管理器中打开"><TextBlock Text="打开" Margin="11,0" FontSize="12.5"/></Button>
+      <StackPanel VerticalAlignment="Center"><TextBlock Text="位置"/><TextBlock x:Name="SharpWhere" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,1,0,0"/></StackPanel></DockPanel></Border>
+    </StackPanel>
+    <!-- the install: a bar and three steps -->    <StackPanel x:Name="SharpProgressBox">
+     <Grid x:Name="SharpBar" Height="3" Margin="12,0,12,10"><Grid.ColumnDefinitions><ColumnDefinition Width="0*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
+      <Border Grid.ColumnSpan="2" CornerRadius="1.5" Background="{DynamicResource FillHover}"/><Border CornerRadius="1.5" Background="{DynamicResource Ink}"/></Grid>
+     <Border Height="34" Padding="12,0"><DockPanel><ContentControl x:Name="SharpStep1Icon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/><TextBlock x:Name="SharpStep1Value" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/><TextBlock x:Name="SharpStep1Text" Text="准备环境" VerticalAlignment="Center"/></DockPanel></Border>
+     <Border Height="34" Padding="12,0"><DockPanel><ContentControl x:Name="SharpStep2Icon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/><TextBlock x:Name="SharpStep2Value" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/><TextBlock x:Name="SharpStep2Text" Text="下载模型" VerticalAlignment="Center"/></DockPanel></Border>
+     <Border Height="34" Padding="12,0"><DockPanel><ContentControl x:Name="SharpStep3Icon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/><TextBlock x:Name="SharpStep3Value" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/><TextBlock x:Name="SharpStep3Text" Text="校验并试运行" VerticalAlignment="Center"/></DockPanel></Border>
+     <TextBlock x:Name="SharpProgressNote" Text="关掉面板也会继续。断网后接着下载。" FontSize="11.5" Foreground="{DynamicResource Ink3}" TextWrapping="Wrap" TextTrimming="None" Margin="12,10,12,0"/>
+    </StackPanel>
+    <!-- ready: what is waiting, and how long it takes at the trial's speed -->
+    <StackPanel x:Name="SharpReadyBox">
+     <Border Height="40" Padding="12,0"><DockPanel><ContentControl x:Name="SharpReadyIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/><TextBlock x:Name="SharpReadyTime" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/><TextBlock x:Name="SharpReadyCount" VerticalAlignment="Center"/></DockPanel></Border>
+     <TextBlock Text="全屏或用电池时自动暂停。" FontSize="11.5" Foreground="{DynamicResource Ink3}" TextWrapping="Wrap" TextTrimming="None" Margin="12,6,12,0"/>
+    </StackPanel>
+   </StackPanel>
+   <Grid Grid.Row="2" Margin="0,10,0,0">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+    <Button x:Name="SharpLeftBtn" Style="{StaticResource Pill}"><TextBlock x:Name="SharpLeftText" Margin="14,0" FontSize="12.5"/></Button>
+    <Border x:Name="SharpBtnGap" Grid.Column="1" Width="8"/>
+    <Button x:Name="SharpRightBtn" Grid.Column="2" Style="{StaticResource Primary}"/>
+   </Grid>
+  </Grid>
+
+  <!-- ================= adjust page (调整图片) ================= -->
+  <Grid x:Name="AdjustPage" Margin="16" Visibility="Collapsed">
+   <Grid.RenderTransform><TranslateTransform/></Grid.RenderTransform>
+   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+   <!-- 自定义 opens the sliders between the preview and the colours; the panel grows upward to make room, so the preview
+        keeps its size and everything above it rises with the panel's top. While it grows this spacer holds the content
+        where it was, and shrinks as the sliders open (ToggleAdjustSliders / GrowPanel). -->
+   <Border x:Name="AdjTopSpacer" Height="0"/>
+   <DockPanel Grid.Row="1" Margin="0,0,0,10">
+    <Button x:Name="AdjustBack" Style="{StaticResource Round}" Background="Transparent" Margin="-6,0,6,0"><ContentControl x:Name="AdjustBackIcon" Width="16" Height="16"/></Button>
+    <StackPanel VerticalAlignment="Center"><TextBlock Text="编辑壁纸" FontSize="14.5" FontWeight="SemiBold"/><TextBlock x:Name="AdjustName" FontSize="12" Foreground="{DynamicResource Ink2}"/></StackPanel>
+   </DockPanel>
+   <!-- a preview of the changes so far, on the background as the desktop shows it (the colour, or the ambience); the
+        file is only written on 保存. A notice shows inside it, at its top. The tool rail is as tall as the preview with
+        the 自定义 sliders closed, and stays so when they open under the preview. -->
+   <Grid Grid.Row="2">
+    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+    <Grid>
+     <Grid.RowDefinitions><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <Border x:Name="AdjustMat" CornerRadius="10" Background="{DynamicResource Fill}" ClipToBounds="True">
+     <Grid>
+      <Border x:Name="AdjustMatAmb" CornerRadius="10" Opacity="0"/>
+      <!-- 延展: the photo's edges flowing into its colour, made for this frame (the photo itself lies exactly over its own copy in it) -->
+      <Border x:Name="AdjustMatExt" CornerRadius="10" Opacity="0"/>
+      <Image x:Name="AdjustPreview" Margin="14" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality">
+       <Image.LayoutTransform><TransformGroup><ScaleTransform x:Name="AdjustMirror"/><RotateTransform x:Name="AdjustTurn"/></TransformGroup></Image.LayoutTransform>
+      </Image>
+      <!-- only for something to read (an error, the delete confirmation, a format that can't be changed) -->
+      <Border x:Name="AdjustNoteBox" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="8" CornerRadius="8" BorderBrush="{DynamicResource Edge}" BorderThickness=".5" Padding="11,6" Visibility="Collapsed" Opacity="0">
+       <TextBlock x:Name="AdjustNote" FontSize="12" TextWrapping="Wrap" TextTrimming="None" TextAlignment="Center"/>
+      </Border>
+     </Grid>
+    </Border>
+     <!-- 自定义: hue, saturation, brightness on a glass strip that grows open under the preview; the preview (and its photo)
+          shrinks to make room, the panel and the tool rail keep their size -->
+   <Border x:Name="AdjSliders" Grid.Row="1" Height="0" Opacity="0" ClipToBounds="True">
+    <Border Margin="0,10,0,0" CornerRadius="10" Background="{DynamicResource Fill}" VerticalAlignment="Top">
+     <StackPanel Margin="10,8,10,8">
+         <Grid x:Name="AdjHue" Height="18" Cursor="Hand" Background="Transparent" ToolTip="色相">
+          <Border Height="10" CornerRadius="5" BorderBrush="#40FFFFFF" BorderThickness=".5">
+           <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Color="#FF0000" Offset="0"/><GradientStop Color="#FFFF00" Offset=".167"/><GradientStop Color="#00FF00" Offset=".333"/><GradientStop Color="#00FFFF" Offset=".5"/>
+            <GradientStop Color="#0000FF" Offset=".667"/><GradientStop Color="#FF00FF" Offset=".833"/><GradientStop Color="#FF0000" Offset="1"/></LinearGradientBrush></Border.Background></Border>
+          <Canvas IsHitTestVisible="False"><Ellipse x:Name="AdjHueKnob" Width="16" Height="16" Stroke="White" StrokeThickness="2.2" Canvas.Top="1"><Ellipse.Effect><DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity=".4"/></Ellipse.Effect></Ellipse></Canvas>
+         </Grid>
+         <Grid x:Name="AdjSat" Height="18" Margin="0,4,0,0" Cursor="Hand" Background="Transparent" ToolTip="饱和度">
+          <Border x:Name="AdjSatTrack" Height="10" CornerRadius="5" BorderBrush="#40FFFFFF" BorderThickness=".5"/>
+          <Canvas IsHitTestVisible="False"><Ellipse x:Name="AdjSatKnob" Width="16" Height="16" Stroke="White" StrokeThickness="2.2" Canvas.Top="1"><Ellipse.Effect><DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity=".4"/></Ellipse.Effect></Ellipse></Canvas>
+         </Grid>
+         <Grid x:Name="AdjVal" Height="18" Margin="0,4,0,0" Cursor="Hand" Background="Transparent" ToolTip="明暗">
+          <Border x:Name="AdjValTrack" Height="10" CornerRadius="5" BorderBrush="#40FFFFFF" BorderThickness=".5"/>
+          <Canvas IsHitTestVisible="False"><Ellipse x:Name="AdjValKnob" Width="16" Height="16" Stroke="White" StrokeThickness="2.2" Canvas.Top="1"><Ellipse.Effect><DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity=".4"/></Ellipse.Effect></Ellipse></Canvas>
+         </Grid>
+     </StackPanel>
+    </Border>
+   </Border>
+    </Grid>
+    <!-- turn / flip, then delete: one vertical tool bar, as tall as the preview. The spacing counts the dividers: every
+         gap between two buttons' hover circles is the same unit, and across a divider there are two units with the line
+         in the middle, so the groups read as groups. -->
+    <Border Grid.Column="1" Margin="10,0,0,0" CornerRadius="16" Background="{DynamicResource Fill}" Padding="2,0">
+     <Grid>
+      <Grid.RowDefinitions>
+       <RowDefinition Height=".6*"/><RowDefinition Height="30"/><RowDefinition Height="*"/><RowDefinition Height="30"/>
+       <RowDefinition Height="*"/><RowDefinition Height="1"/><RowDefinition Height="*"/>
+       <RowDefinition Height="30"/><RowDefinition Height="*"/><RowDefinition Height="30"/>
+       <RowDefinition Height="*"/><RowDefinition Height="1"/><RowDefinition Height="*"/>
+       <RowDefinition Height="30"/><RowDefinition Height=".6*"/>
+      </Grid.RowDefinitions>
+      <Button x:Name="AdjRotL" Grid.Row="1" Style="{StaticResource Round}" Width="30" Height="30" Background="Transparent" ToolTip="左转"><ContentControl x:Name="AdjRotLIcon" Width="17" Height="17"/></Button>
+      <Button x:Name="AdjRotR" Grid.Row="3" Style="{StaticResource Round}" Width="30" Height="30" Background="Transparent" ToolTip="右转"><ContentControl x:Name="AdjRotRIcon" Width="17" Height="17"/></Button>
+      <Border Grid.Row="5" Height="1" Width="14" Background="{DynamicResource Hair}"/>
+      <Button x:Name="AdjFlipH" Grid.Row="7" Style="{StaticResource Round}" Width="30" Height="30" Background="Transparent" ToolTip="左右翻转"><ContentControl x:Name="AdjFlipHIcon" Width="17" Height="17"/></Button>
+      <Button x:Name="AdjFlipV" Grid.Row="9" Style="{StaticResource Round}" Width="30" Height="30" Background="Transparent" ToolTip="上下翻转"><ContentControl x:Name="AdjFlipVIcon" Width="17" Height="17"/></Button>
+      <Border Grid.Row="11" Height="1" Width="14" Background="{DynamicResource Hair}"/>
+      <!-- delete, last and apart: a second click (the button fills red) moves the photo to the Recycle Bin -->
+      <Button x:Name="AdjDelete" Grid.Row="13" Style="{StaticResource Round}" Width="30" Height="30" Background="Transparent" Foreground="{DynamicResource Danger}" ToolTip="删除：把原图移到回收站（可以还原）"><ContentControl x:Name="AdjDeleteIcon" Width="17" Height="17"/></Button>
+     </Grid>
+    </Border>   </Grid>
+   <!-- background colour: suggestions (自动 first), then 自定义 (opens hue, saturation, brightness) and the eyedropper;
+        the preview's mat shows it as you go -->
+   <StackPanel Grid.Row="4" Margin="0,10,0,0">
+    <!-- the background, all on this page: 纯色 / 氛围 (the wallpaper background, the same for every photo, as the menu's
+         壁纸背景), then for 纯色 this photo's colour; both are written on 保存 -->
+    <StackPanel Orientation="Horizontal">
+    <Border CornerRadius="8" Background="{DynamicResource Fill}" Padding="2" VerticalAlignment="Center" ToolTip="壁纸背景 · 对所有图片生效">
+     <UniformGrid x:Name="AdjModeSeg" Columns="3" Rows="1"><Button Style="{StaticResource Seg}" Tag="color" Content="纯色" Height="24" Width="38"/><Button Style="{StaticResource Seg}" Tag="extend" Content="延展" Height="24" Width="38"/><Button Style="{StaticResource Seg}" Tag="ambient" Content="氛围" Height="24" Width="38"/></UniformGrid></Border>
+    <TextBlock x:Name="AdjAmbientLine" Text="所有图片都用模糊的图片本身作背景" FontSize="11.5" Foreground="{DynamicResource Ink3}" VerticalAlignment="Center" Margin="10,0,0,0" Visibility="Collapsed"/>
+    <StackPanel x:Name="AdjColorRow" Orientation="Horizontal" Margin="10,0,0,0">
+     <StackPanel x:Name="AdjSuggestions" Orientation="Horizontal" VerticalAlignment="Center"/>
+     <Button x:Name="AdjCustom" Style="{StaticResource Bare}" ToolTip="自定义颜色" VerticalAlignment="Center">
+      <Grid Width="24" Height="24">
+       <Ellipse><Ellipse.Fill><LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF4D4D" Offset="0"/><GradientStop Color="#FFD84D" Offset=".25"/><GradientStop Color="#4DD88A" Offset=".5"/><GradientStop Color="#4D8AFF" Offset=".75"/><GradientStop Color="#C64DFF" Offset="1"/></LinearGradientBrush></Ellipse.Fill></Ellipse>
+       <Ellipse x:Name="AdjCustomRing" Stroke="{DynamicResource Ink}" StrokeThickness="0"/>
+      </Grid>
+     </Button>
+     <!-- the eyedropper: one more dot in the row -->
+     <Button x:Name="AdjDropper" Style="{StaticResource Round}" Width="24" Height="24" Margin="7,0,0,0" VerticalAlignment="Center" ToolTip="吸管：在屏幕上取色"><ContentControl x:Name="AdjDropperIcon" Width="13" Height="13"/></Button>
+    </StackPanel>
+    </StackPanel>
+   </StackPanel>
+   <Grid Grid.Row="5" Margin="0,10,0,0">
+    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
+    <Button x:Name="AdjustCancel" Style="{StaticResource Pill}" Content="取消"/>
+    <Button x:Name="AdjustSave" Grid.Column="2" Style="{StaticResource Primary}" Content="保存"/>
+   </Grid>
+  </Grid>
+
+  <!-- ================= playlist page ================= -->
+  <Grid x:Name="PlaylistPage" Margin="16" Visibility="Collapsed">
+   <Grid.RenderTransform><TranslateTransform/></Grid.RenderTransform>
+   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+   <DockPanel Margin="0,0,0,10">
+    <Button x:Name="PlaylistBack" Style="{StaticResource Round}" Background="Transparent" Margin="-6,0,6,0"><ContentControl x:Name="PlaylistBackIcon" Width="16" Height="16"/></Button>
+    <StackPanel VerticalAlignment="Center"><TextBlock Text="播放列表" FontSize="14.5" FontWeight="SemiBold"/><TextBlock x:Name="PlaylistCount" FontSize="12" Foreground="{DynamicResource Ink2}"/></StackPanel>
+   </DockPanel>
+   <!-- the list scrolls inside the page (wheel), so the panel never grows -->
+   <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Hidden" Margin="-8,0,-8,0" Focusable="False"><StackPanel x:Name="PlaylistItems"/></ScrollViewer>
+   <!-- only when something went wrong (a refused folder and so on) -->
+   <TextBlock x:Name="PlaylistNote" Grid.Row="2" FontSize="11.5" Foreground="{DynamicResource Danger}" TextWrapping="Wrap" TextTrimming="None" Margin="2,8,0,0" Visibility="Collapsed"/>
+   <Grid Grid.Row="3" Margin="0,12,0,0">
+    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
+    <Button x:Name="AddFolderBtn" Style="{StaticResource Pill}"><StackPanel Orientation="Horizontal"><ContentControl x:Name="AddFolderIcon" Width="16" Height="16" Margin="0,0,6,0"/><TextBlock Text="添加文件夹" VerticalAlignment="Center"/></StackPanel></Button>
+    <Button x:Name="AddImagesBtn" Grid.Column="2" Style="{StaticResource Pill}"><StackPanel Orientation="Horizontal"><ContentControl x:Name="AddImagesIcon" Width="16" Height="16" Margin="0,0,6,0"/><TextBlock Text="添加图片" VerticalAlignment="Center"/></StackPanel></Button>
+   </Grid>
+  </Grid>
+ </Grid>
+</Window>

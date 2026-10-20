@@ -1,0 +1,25 @@
+# build output and release packages
+build/
+dist/
+*.exe
+*.dll
+*.obj
+*.lib
+*.exp
+*.pdb
+__pycache__/
+
+# a running copy's own files, if Matte is ever started from the repository folder
+settings.json
+*.log
+*.tsv
+*.request
+spatial-battery.txt
+spatial-enabled.txt
+spatial-roots.txt
+excluded-folders.txt
+spatial/pictures/
+spatial/runtime/
+ambient-cache/
+display-cache/
+desktop-icon/

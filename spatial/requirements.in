@@ -1,0 +1,12 @@
+# What Matte's SHARP generator needs (matte_sharp.py and spatial\sharp). Matte installs the locked lists made from
+# this, wheels only (nothing is built on the user's machine; rectpack, which has no wheel, is in spatial\rectpack):
+# requirements-cpu.txt (default) or requirements-cu128.txt (NVIDIA acceleration). To remake them:
+#   uv pip compile requirements.in --torch-backend cpu   --python-version 3.12 --python-platform x86_64-pc-windows-msvc --generate-hashes --only-binary :all: --exclude-newer <date> -o requirements-cpu.txt
+#   uv pip compile requirements.in --torch-backend cu128 --python-version 3.12 --python-platform x86_64-pc-windows-msvc --generate-hashes --only-binary :all: --exclude-newer <date> -o requirements-cu128.txt
+torch==2.11.0
+torchvision
+timm
+numpy
+scipy
+pillow
+plyfile
