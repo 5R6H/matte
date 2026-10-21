@@ -55,8 +55,7 @@ partial class App {
    if(File.Exists(done)&&File.Exists(backdrop))return done;
    Directory.CreateDirectory(AmbientDir);
    var size=AmbientScreen;
-   using(var photo=Image.FromFile(display)){
-    Upright(photo);
+   using(var photo=LoadUpright(display)){
     using(var bg=AmbienceImage(photo,size)){
      SaveJpeg(bg,backdrop,90);
      using(var g=Graphics.FromImage(bg)){g.InterpolationMode=InterpolationMode.HighQualityBicubic;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.CompositingQuality=CompositingQuality.HighQuality;
@@ -69,10 +68,29 @@ partial class App {
   return done;
  }
  // As Windows shows it: turned by its EXIF orientation (GDI+ loads the stored pixels).
- static void Upright(Image im){
+ internal static void Upright(Image im){
   if(Array.IndexOf(im.PropertyIdList,0x0112)<0)return;int o=BitConverter.ToUInt16(im.GetPropertyItem(0x0112).Value,0);
   var f=o==2?RotateFlipType.RotateNoneFlipX:o==3?RotateFlipType.Rotate180FlipNone:o==4?RotateFlipType.Rotate180FlipX:o==5?RotateFlipType.Rotate90FlipX:o==6?RotateFlipType.Rotate90FlipNone:o==7?RotateFlipType.Rotate270FlipX:o==8?RotateFlipType.Rotate270FlipNone:RotateFlipType.RotateNoneFlipNone;
   if(f!=RotateFlipType.RotateNoneFlipNone)im.RotateFlip(f);
+ }
+ // A picture to read, turned upright: everything that looks at a photo (colours, edges, layout) starts from this.
+ internal static Image LoadUpright(string path){var im=Image.FromFile(path);try{Upright(im);}catch{im.Dispose();throw;}return im;}
+ // The same for WPF, which decodes the stored pixels too (a phone's portrait photo lies on its side): the EXIF orientation
+ // turned into a TransformedBitmap, in the order Upright uses (turn, then mirror).
+ internal static System.Windows.Media.Imaging.BitmapSource UprightWpf(System.Windows.Media.Imaging.BitmapSource b,string path){
+  int o=Orientation(path);if(b==null||o<=1||o>8)return b;
+  int turn=o==3||o==4?180:o==5||o==6?90:o==7||o==8?270:0;bool mirror=o==2||o==4||o==5||o==7;
+  if(o==4){turn=0;}   // 4 = upside-down mirror: Upright turns 180 then mirrors, which is a vertical mirror
+  var g=new System.Windows.Media.TransformGroup();
+  if(turn!=0)g.Children.Add(new System.Windows.Media.RotateTransform(turn));
+  if(mirror)g.Children.Add(o==4?new System.Windows.Media.ScaleTransform(1,-1):new System.Windows.Media.ScaleTransform(-1,1));
+  var t=new System.Windows.Media.Imaging.TransformedBitmap(b,g);t.Freeze();return t;
+ }
+ internal static int Orientation(string path){
+  try{var frame=System.Windows.Media.Imaging.BitmapFrame.Create(new Uri(path),System.Windows.Media.Imaging.BitmapCreateOptions.DelayCreation|System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreColorProfile,System.Windows.Media.Imaging.BitmapCacheOption.None);
+   var md=frame.Metadata as System.Windows.Media.Imaging.BitmapMetadata;if(md==null||!md.ContainsQuery("System.Photo.Orientation"))return 1;
+   var v=md.GetQuery("System.Photo.Orientation");return v==null?1:System.Convert.ToInt32(v);}
+  catch{return 1;}
  }
  static Rectangle FitRect(Size picture,Size screen){
   double scale=Math.Min((double)screen.Width/picture.Width,(double)screen.Height/picture.Height);int w=(int)Math.Round(picture.Width*scale),h=(int)Math.Round(picture.Height*scale);
@@ -124,7 +142,7 @@ partial class App {
   var size=AmbientScreen;string key=AmbientKey(display)+"-"+color.ToString("X6");string done=Path.Combine(AmbientDir,key+"-x.jpg");
   lock(ambientLock){
    if(File.Exists(done))return done;Directory.CreateDirectory(AmbientDir);
-   using(var photo=Image.FromFile(display)){Upright(photo);using(var b=ExtendWallpaper.Make(photo,size,Unpack(color)))SaveJpeg(b,done,95);}
+   using(var photo=LoadUpright(display)){using(var b=ExtendWallpaper.Make(photo,size,Unpack(color)))SaveJpeg(b,done,95);}
    TrimAmbientCache();
   }
   return done;

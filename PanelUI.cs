@@ -334,7 +334,7 @@ partial class App {
   knob.Fill=Fading(((SolidColorBrush)knob.Fill).Color,on?kOn:kOff,220);
   Animate(move,TranslateTransform.XProperty,on?0:14,on?14:0,260);
  }
- static BitmapSource Cover(string path){try{var b=new BitmapImage();b.BeginInit();b.CacheOption=BitmapCacheOption.OnLoad;b.DecodePixelWidth=200;b.UriSource=new Uri(path);b.EndInit();b.Freeze();return b;}catch{return null;}}
+ static BitmapSource Cover(string path){try{var b=new BitmapImage();b.BeginInit();b.CacheOption=BitmapCacheOption.OnLoad;b.DecodePixelWidth=200;b.UriSource=new Uri(path);b.EndInit();b.Freeze();return UprightWpf(b,path);}catch{return null;}}
  // The wallpaper is changing (slideshow, 下一张, Spatial, delete): the open panel follows at once.
  DateTime lastAdvance;
  // newPhoto: another photo (the card says 正在换图 for a moment); the same one shown again (Spatial on / off, a new

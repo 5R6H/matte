@@ -198,6 +198,7 @@ def main():
                 print('GPU memory too small, using the CPU', flush=True)
                 torch.cuda.empty_cache(); device = torch.device('cpu'); predictor.to(device); use_device(device)
                 make(predictor, device, photo, cache / f'{photo.stem}.spatial', a.width, a.height)
+            print(f'Saved: {photo.name}', flush=True)   # Matte counts a photo as made only now
         except Exception as e:   # one bad photo does not stop the rest
             failed += 1
             print(f'Failed: {photo.name}: {e}', flush=True)

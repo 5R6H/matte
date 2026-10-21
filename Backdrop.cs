@@ -63,7 +63,7 @@ partial class App {
  static double AmbTarget(double mean){return Math.Max(70,Math.Min(150,mean))*.66+28;}   // 74..127 (on 0-255), before the dim
  static Tuple<BitmapSource,Color> Ambience(string path){
   var b=new BitmapImage();b.BeginInit();b.CacheOption=BitmapCacheOption.OnLoad;b.DecodePixelWidth=120;b.UriSource=new Uri(path);b.EndInit();b.Freeze();
-  var src=new FormatConvertedBitmap(b,PixelFormats.Bgra32,null,0);int w=src.PixelWidth,h=src.PixelHeight,stride=w*4;var px=new byte[stride*h];src.CopyPixels(px,stride,0);
+  var src=new FormatConvertedBitmap(UprightWpf(b,path),PixelFormats.Bgra32,null,0);int w=src.PixelWidth,h=src.PixelHeight,stride=w*4;var px=new byte[stride*h];src.CopyPixels(px,stride,0);
   double sum=0,r=0,g=0,bl=0;int n=w*h;
   for(int i=0;i<px.Length;i+=4){sum+=.0722*px[i]+.7152*px[i+1]+.2126*px[i+2];bl+=px[i];g+=px[i+1];r+=px[i+2];}
   double mean=sum/n,target=AmbTarget(mean);

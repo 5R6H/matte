@@ -16,6 +16,16 @@ class MatteSettings {
  public string SpatialStoreTarget;   // where the Spatial store really is when moved (the default path is then a junction to it)
  public List<string> SpatialStoreOld;   // old copies left by a move, until cleared on 存储与清理
  public string Background="color";   // the wallpaper around the photo: color | extend | ambient
+ // Values Matte does not offer (a hand-edited or damaged file) go back to the defaults. The photo is always shown whole
+ // (Windows' "fit", 3): Matte has no other choice, so anything else came from Windows' own setting when Matte first
+ // started, and "fill" crops the photo and keeps the synchronized cross-fade (SynchronizedFade) from running.
+ public void Normalize(){
+  Position=3;if(Interval<10000)Interval=1800000;
+  if(Background!="color"&&Background!="extend"&&Background!="ambient")Background="color";
+  if(PanelStyle!="ambient"&&PanelStyle!="simple")PanelStyle="ambient";
+  if(Order!="shuffle"&&Order!="sequential")Order="shuffle";
+  if(Motion!="follow"&&Motion!="reverse"&&Motion!="drift"&&Motion!="random")Motion="follow";
+ }
 }
 // A hidden window for the app's own messages: Explorer restarting (the tray icon and the wallpaper service come back),
 // and work handed back to the UI thread from background threads.
@@ -36,10 +46,12 @@ partial class App {
  static JavaScriptSerializer json=new JavaScriptSerializer();
  string SettingsFile{get{return Path.Combine(Dir,"settings.json");}}
  void InitSlideshow(){
-  if(File.Exists(SettingsFile))settings=json.Deserialize<MatteSettings>(File.ReadAllText(SettingsFile));else{
+  // read safely (SettingsStore, Theme.cs): a damaged file falls back to the copy before it, or to fresh settings
+  settings=SettingsStore.Load(SettingsFile,t=>json.Deserialize<MatteSettings>(t),Log);
+  if(settings!=null){settings.Normalize();SaveSettings();}else{
    settings=new MatteSettings();settings.Folder=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),"Wallpaper");settings.Playlist=new List<string>();
-   settings.Position=wall.GetPosition();wall.GetSlideshowOptions(out settings.Options,out settings.Interval);if(settings.Interval<10000)settings.Interval=1800000;settings.Options|=1;
-   File.WriteAllText(SettingsFile,json.Serialize(settings));
+   wall.GetSlideshowOptions(out settings.Options,out settings.Interval);settings.Normalize();   // the photo whole, not Windows' own fillif(settings.Interval<10000)settings.Interval=1800000;settings.Options|=1;
+   SaveSettings();
   }
   LoadSpatialMode();ui=new MessageWindow();ui.ShellRestarted=OnShellRestarted;
   InitSpatialPower();

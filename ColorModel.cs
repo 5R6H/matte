@@ -18,7 +18,7 @@ sealed class ColorModel {
 
  // Downscales to 256 px on the long side; "leftRight" = the fitted picture leaves the background visible left and right.
  public static ColorModel Load(string path,double screenAspect){
-  using(var im=Image.FromFile(path)){
+  using(var im=App.LoadUpright(path)){   // as Windows shows it: its edges are the ones that meet the colour
    double k=256.0/Math.Max(im.Width,im.Height);int sw=Math.Max(8,(int)Math.Round(im.Width*k)),sh=Math.Max(8,(int)Math.Round(im.Height*k));
    using(var b=new Bitmap(sw,sh,PixelFormat.Format24bppRgb)){
     // TileFlipXY: without it GDI+ blends the outermost pixels with transparent black, which is exactly the edge measured here.

@@ -26,7 +26,7 @@ static class Palette {
  }
  static List<Lab> Pixels(string path){
   var list=new List<Lab>();
-  using(var im=Image.FromFile(path)){
+  using(var im=App.LoadUpright(path)){
    double s=Math.Min(1,110.0/Math.Max(im.Width,im.Height));int w=Math.Max(1,(int)(im.Width*s)),h=Math.Max(1,(int)(im.Height*s));
    using(var b=new Bitmap(w,h)){using(var g=Graphics.FromImage(b)){g.InterpolationMode=InterpolationMode.HighQualityBilinear;g.DrawImage(im,0,0,w,h);}
     var d=b.LockBits(new Rectangle(0,0,w,h),System.Drawing.Imaging.ImageLockMode.ReadOnly,System.Drawing.Imaging.PixelFormat.Format32bppArgb);

@@ -119,7 +119,7 @@ IWallpaper wall; NotifyIcon tray; System.Windows.Forms.Timer poll,fade;
  // The automatic colour: of the classic colour and the main edge colours, the one that meets the picture's edge most smoothly.
  static uint AutoColor(string p){uint classic=Analyze(p);return Pack(ColorModel.Load(p,ScreenAspect).Auto(Unpack(classic)).Color);}
  static Color FromHsl(double h,double s,double l){double c=(1-Math.Abs(2*l-1))*s,x=c*(1-Math.Abs((h/60)%2-1)),m=l-c/2;double r=0,g=0,b=0;if(h<60){r=c;g=x;}else if(h<120){r=x;g=c;}else if(h<180){g=c;b=x;}else if(h<240){g=x;b=c;}else if(h<300){r=x;b=c;}else{r=c;b=x;}return Color.FromArgb((int)Math.Round((r+m)*255),(int)Math.Round((g+m)*255),(int)Math.Round((b+m)*255));}
- static uint Analyze(string p){using(var im=Image.FromFile(p))using(var b=new Bitmap(96,96)){
+ static uint Analyze(string p){using(var im=LoadUpright(p))using(var b=new Bitmap(96,96)){
  bool side=(double)im.Width/im.Height < (double)Screen.PrimaryScreen.Bounds.Width/Screen.PrimaryScreen.Bounds.Height;
  using(var g=Graphics.FromImage(b))g.DrawImage(im,0,0,96,96);
  var pixels=new List<double[]>();double[] hist=new double[1331];double[,] sums=new double[1331,3];

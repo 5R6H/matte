@@ -22,7 +22,7 @@ partial class App {
  // a moved store leaves a junction at the old path, so this path keeps working)
  string DefaultSpatialCacheDir{get{return Path.Combine(OwnSpatialDir,"pictures");}}
  string SpatialCacheDir{get{return settings!=null&&!string.IsNullOrEmpty(settings.SpatialFolder)?settings.SpatialFolder:DefaultSpatialCacheDir;}}
- Process gen;int genTotal,genDone;string genPhase;bool genStopped;
+ Process gen;int genTotal,genDone,genFailed;GenProgress genProgress=new GenProgress();string genPhase;bool genStopped;
  bool Generating{get{return gen!=null&&!gen.HasExited;}}
 
  // What the playlist still needs: photos with no Spatial file, and photos changed since theirs was made. Names used by
@@ -88,7 +88,7 @@ partial class App {
   File.WriteAllLines(list,roots,new UTF8Encoding(false));
   var psi=new ProcessStartInfo("powershell.exe","-NoProfile -ExecutionPolicy Bypass -File \""+GeneratorScript+"\" -RootsFile \""+list+"\" -Cache \""+SpatialCacheDir+"\""){
    UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8};
-  gen=new Process{StartInfo=psi,EnableRaisingEvents=true};genTotal=genDone=0;genPhase="正在准备…";genStopped=false;genHeld=null;genNotice=null;
+  gen=new Process{StartInfo=psi,EnableRaisingEvents=true};genTotal=genDone=genFailed=0;genProgress=new GenProgress();genPhase="正在准备…";genStopped=false;genHeld=null;genNotice=null;
   gen.OutputDataReceived+=(s,a)=>{if(a.Data!=null)ui.BeginInvoke((Action)(()=>GenLine(a.Data)));};
   gen.ErrorDataReceived+=(s,a)=>{};   // Python's ordinary progress warnings
   gen.Exited+=delegate{ui.BeginInvoke((Action)GenFinished);};
@@ -113,21 +113,41 @@ partial class App {
  void GenLine(string line){
   if(line.StartsWith("Preparing contain-size proxies"))genPhase="正在准备图片…";
   else if(line.StartsWith("Updating ")){genPhase="正在更新改过的图片…";}
-  var m=Regex.Match(line,@"Processing (\d+) valid");if(m.Success){genTotal+=int.Parse(m.Groups[1].Value);genPhase="正在生成";}
-  if(line.StartsWith("Predicting gaussians for")){genDone++;genPhase="正在生成";}
+  genProgress.Line(line);genTotal=genProgress.Total;genDone=genProgress.Done;genFailed=genProgress.Failed;
+  if(line.StartsWith("Predicting gaussians for")||Regex.IsMatch(line,@"Processing (\d+) valid"))genPhase="正在生成";
   if(line.StartsWith("Nothing to generate"))genPhase="没有需要生成的图片";
   if(line.StartsWith("GPU memory too small")&&!genCpuNoted){genCpuNoted=true;genNotice="显存不够，这次改用 CPU";}
   GenChanged();
  }
  // Done (or stopped): the new files count at once; with Spatial on, the rotation takes them in.
+ static string Short(string s){return s.Length>60?s.Substring(0,59)+"…":s;}
  void GenFinished(){
   try{File.Delete(Path.Combine(Dir,"spatial-roots.txt"));}catch{}   // the list of what to make was only for this run
   int code=-1;try{code=gen.ExitCode;}catch{}
-  Log("Spatial generation "+(genStopped?"stopped":"ended")+", exit "+code+", "+genDone+" made");
-  genPhase=genStopped?"已停止 · 已完成 "+genDone+" 张":code==0?"完成 · 生成了 "+genDone+" 张":"出错了（退出码 "+code+"）· 已完成 "+genDone+" 张";
+  genProgress.Exit(genStopped?-1:code);genDone=genProgress.Done;genFailed=genProgress.Failed;
+  if(genStopped&&genFailed>0)genFailed--;   // the photo it was stopped on did not fail
+  Log("Spatial generation "+(genStopped?"stopped":"ended")+", exit "+code+", "+genDone+" made, "+genFailed+" failed"+(genProgress.LastFailure!=null?" (last: "+genProgress.LastFailure+")":""));
+  string failed=genFailed>0?" · "+genFailed+" 张没成功"+(genProgress.LastFailure!=null?"（"+Short(genProgress.LastFailure)+"）":""):"";
+  genPhase=(genStopped?"已停止 · 已完成 "+genDone+" 张":code==0&&genFailed==0?"完成 · 生成了 "+genDone+" 张":genFailed>0?"生成了 "+genDone+" 张":"出错了（退出码 "+code+"）· 已完成 "+genDone+" 张")+failed;
   try{LoadSpatialCatalog();if(spatialEnabled)RebuildSlides();}catch(Exception e){Log("After generation: "+e.Message);}
   if(!genStopped&&code==0&&genDone>0)try{tray.ShowBalloonTip(3000,"Matte","Spatial 图片生成完成：新增 "+genDone+" 张",System.Windows.Forms.ToolTipIcon.Info);}catch{}
   GenChanged();if(panel!=null)RefreshSpatial(true);
   RunSpatialSweep();   // the new pictures into the index   // the counts again, now with the new pictures
  }
+}
+// What the generator's output says about the photos so far. A photo counts as made only once it is written (Matte's
+// generator says "Saved: <name>"); "Failed: <name>: <why>" counts it as failed, the reason kept. A generator of one's own
+// that only says "Predicting gaussians for <photo>" has a photo counted as made when the next one starts or when it exits
+// cleanly; exiting with an error counts the photo it was on as failed.
+class GenProgress {
+ public int Total,Done,Failed;public string LastFailure;bool open;
+ public int Current{get{return System.Math.Min(Total,Done+Failed+1);}}   // the photo being made now, from 1
+ public void Line(string line){
+  var m=Regex.Match(line,@"Processing (\d+) valid");if(m.Success)Total+=int.Parse(m.Groups[1].Value);
+  if(line.StartsWith("Predicting gaussians for")){Close(true);open=true;}
+  else if(line.StartsWith("Saved: ")){if(open){open=false;Done++;}}
+  else if(line.StartsWith("Failed: ")){open=false;Failed++;LastFailure=line.Substring(8).Trim();}
+ }
+ public void Exit(int code){Close(code==0);}
+ void Close(bool ok){if(!open)return;open=false;if(ok)Done++;else Failed++;}
 }

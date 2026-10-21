@@ -23,3 +23,6 @@ spatial/runtime/
 ambient-cache/
 display-cache/
 desktop-icon/
+
+# the regression tests' build and scratch files
+tests/bin/

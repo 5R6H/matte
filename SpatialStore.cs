@@ -22,11 +22,13 @@ partial class App {
   return s;
  }
  long storeOldBytes;
- void RefreshStore(){
+ // 存储与清理 opened: its figures, and a sweep (whose end shows its result with RefreshStoreView, never another sweep:
+ // that was a loop, sweeping the whole library again and again while the page stayed open)
+ void RefreshStore(){RefreshStoreView();RunSpatialSweep();}
+ void RefreshStoreView(){
   if(panel==null)return;int g=++storeGeneration;
   if(storeInfo==null)P<TextBlock>("StoreTotal").Text="正在统计…";
   Task.Run(()=>ReadStore()).ContinueWith(t=>panel.Dispatcher.BeginInvoke(new Action(()=>{if(g!=storeGeneration)return;if(t.Exception!=null){Log("Spatial store: "+t.Exception.InnerException.Message);return;}storeInfo=t.Result;PaintStore();})));
-  RunSpatialSweep();
  }
  void PaintStore(){
   var s=storeInfo;if(s==null)return;
@@ -42,10 +44,11 @@ partial class App {
   PaintSweep();PaintStoreSharp();
  }
  // ---- automatic tidying (SpatialIndex.Sweep), off the UI thread
+ int sweepsStarted;   // how many sweeps this run has started (the regression test for the loop counts them)
  bool sweeping;DateTime lastSweep=DateTime.Now.AddHours(-6).AddMinutes(1);SpatialIndex.Result sweepResult;
  void RunSpatialSweep(){
   if(sweeping||Generating||storeMoving||settings==null||ui==null)return;   // (no ui window: not the running app, e.g. a test)
-  sweeping=true;lastSweep=DateTime.Now;
+  sweeping=true;lastSweep=DateTime.Now;sweepsStarted++;
   var dispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;
   Task.Run(()=>{
    var photos=new List<string>(SourceImages());
@@ -55,7 +58,7 @@ partial class App {
    if(t.Exception!=null){Log("Spatial sweep: "+t.Exception.InnerException.Message);return;}if(t.Result==null)return;
    sweepResult=t.Result;var r=t.Result;
    if(r.Reattached>0||r.Cleaned>0){Log("Spatial sweep: "+r.Reattached+" re-attached, "+r.Cleaned+" cleared");try{LoadSpatialCatalog();if(spatialEnabled)RebuildSlides();}catch(Exception e){Log("After sweep: "+e.Message);}}
-   if(panel!=null&&PanelOpen){if(page=="spatialstore")RefreshStore();PaintSweep();}
+   if(panel!=null&&PanelOpen){if(page=="spatialstore")RefreshStoreView();PaintSweep();}
   })));
  }
  void PaintSweep(){

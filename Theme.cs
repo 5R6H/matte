@@ -8,3 +8,21 @@ static class Theme {
  // Writes a file in one step: a crash or power cut mid-write leaves the old contents, never half a file.
  public static void AtomicWrite(string path,string contents){string tmp=path+".tmp";File.WriteAllText(tmp,contents,Encoding.UTF8);if(File.Exists(path))File.Replace(tmp,path,null);else File.Move(tmp,path);}
 }
+// The settings file: written whole to a temporary file and swapped in, the version before kept as .bak; read back from
+// the .bak when the file itself does not read (cut short by a crash or a power cut, edited by hand), the unreadable one
+// kept aside as .bad. Neither reads: null, and Matte starts with fresh settings.
+static class SettingsStore {
+ public static void Save(string path,string text){
+  string tmp=path+".tmp";File.WriteAllText(tmp,text,new UTF8Encoding(false));
+  if(File.Exists(path))File.Replace(tmp,path,path+".bak");else File.Move(tmp,path);
+ }
+ public static T Load<T>(string path,System.Func<string,T> parse,System.Action<string> log) where T:class{
+  foreach(var p in new[]{path,path+".bak"}){
+   if(!File.Exists(p))continue;
+   try{var v=parse(File.ReadAllText(p));if(v!=null){if(p!=path)log("Settings: "+Path.GetFileName(path)+" did not read; using the copy before it");return v;}log("Settings: "+Path.GetFileName(p)+" is empty");}
+   catch(System.Exception e){log("Settings: "+Path.GetFileName(p)+" does not read: "+e.Message);}
+   if(p==path)try{File.Copy(p,path+".bad",true);}catch{}
+  }
+  return null;
+ }
+}

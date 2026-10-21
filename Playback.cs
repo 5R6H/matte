@@ -36,7 +36,7 @@ partial class App {
   shownColor=EmptyColor;nextSlide=DateTime.Now.AddMilliseconds(settings.Interval);
   UpdateTray();PanelWallpaperChanged(null,EmptyColor,600);
  }
- void SaveSettings(){File.WriteAllText(SettingsFile,json.Serialize(settings));}
+ void SaveSettings(){SettingsStore.Save(SettingsFile,json.Serialize(settings));}
 
  static bool IsUnder(string path,string folder){
   if(string.IsNullOrEmpty(path)||string.IsNullOrEmpty(folder))return false;string f=folder.TrimEnd('\\');
