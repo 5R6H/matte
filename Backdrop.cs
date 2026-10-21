@@ -56,11 +56,11 @@ partial class App {
  // on top would darken the colour along with the brightness (that was the muddy look); this keeps the hue, so the
  // panel takes on the photo's colours. Then blurred here, once (three box passes = a Gaussian about as soft as the
  // 48 px BlurEffect it replaces). Also returns the photo's tone: its average colour, made deep and rich.
- const byte AmbDim=0x0F;   // the light dim layer on top (6%)
+ const byte AmbDim=0x06;   // the light dim layer on top (2.4%)
  // keep: how much of each pixel's own difference from the average survives, more for the darks than the lights (depth
  // without bright patches behind the text); chroma: the colour lift, relative to how far the pixel was darkened
- const double AmbKeepDark=.36,AmbKeepLight=.2,AmbChroma=1.18,AmbChromaKnee=40,AmbChromaMax=68;   // channel distance from grey, 0-255
- static double AmbTarget(double mean){return Math.Max(70,Math.Min(150,mean))*.56+14;}   // 53..98 (on 0-255), before the dim
+ const double AmbKeepDark=.42,AmbKeepLight=.27,AmbChroma=1.38,AmbChromaKnee=48,AmbChromaMax=90;   // channel distance from grey, 0-255
+ static double AmbTarget(double mean){return Math.Max(70,Math.Min(150,mean))*.66+28;}   // 74..127 (on 0-255), before the dim
  static Tuple<BitmapSource,Color> Ambience(string path){
   var b=new BitmapImage();b.BeginInit();b.CacheOption=BitmapCacheOption.OnLoad;b.DecodePixelWidth=120;b.UriSource=new Uri(path);b.EndInit();b.Freeze();
   var src=new FormatConvertedBitmap(b,PixelFormats.Bgra32,null,0);int w=src.PixelWidth,h=src.PixelHeight,stride=w*4;var px=new byte[stride*h];src.CopyPixels(px,stride,0);

@@ -140,10 +140,10 @@
      <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
       <TextBlock x:Name="WallName" FontSize="14.5" FontWeight="SemiBold"/>
       <!-- the folder the photo comes from, then the time to the next one -->
-      <StackPanel Orientation="Horizontal" Margin="0,2,0,0"><ContentControl x:Name="WallFolderIcon" Width="12" Height="12" Margin="0,0,5,0" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/><TextBlock x:Name="WallFolder" FontSize="12" MaxWidth="160" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/></StackPanel>
+      <StackPanel Orientation="Horizontal" Margin="0,-0.5,0,0"><ContentControl x:Name="WallFolderIcon" Width="12" Height="12" Margin="0,0,5,0" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/><TextBlock x:Name="WallFolder" FontSize="12" MaxWidth="160" Foreground="{DynamicResource Ink2}" VerticalAlignment="Center"/></StackPanel>
       <!-- whether this photo can show in Spatial 3D (an up-to-date Spatial file) · the time to the next photo; the time
            last, since its length changes as it counts -->
-      <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+      <StackPanel Orientation="Horizontal" Margin="0,3.8,0,0">
        <StackPanel x:Name="SpatialBadge" Orientation="Horizontal" VerticalAlignment="Center">
         <Border x:Name="SpatialBadgeBox" CornerRadius="4" Padding="5,0,5,1" BorderThickness="1" VerticalAlignment="Center"><TextBlock x:Name="SpatialBadgeText" FontSize="10.5" FontWeight="SemiBold"/></Border>
         <TextBlock x:Name="SpatialBadgeDot" Text="·" FontSize="12" Foreground="{DynamicResource Ink3}" Margin="6,0" VerticalAlignment="Center"/></StackPanel>
@@ -186,11 +186,7 @@
      <Border x:Name="SwitchTrack" DockPanel.Dock="Right" Width="34" Height="20" CornerRadius="10" VerticalAlignment="Center"><Ellipse x:Name="SwitchKnob" Width="16" Height="16" HorizontalAlignment="Left" Margin="2,0,0,0"><Ellipse.RenderTransform><TranslateTransform/></Ellipse.RenderTransform><Ellipse.Effect><DropShadowEffect BlurRadius="4" ShadowDepth="1" Direction="270" Opacity=".35"/></Ellipse.Effect></Ellipse></Border>
      <TextBlock x:Name="SpatialNote" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource Ink3}" VerticalAlignment="Center" Margin="0,0,10,0"/>
      <TextBlock Text="Spatial 3D" VerticalAlignment="Center"/></DockPanel></Button>
-    <!-- 编辑图片: this photo on the desktop - its background (the swatch), turn / flip, delete -->
-    <Button x:Name="AdjustRow" Style="{StaticResource Row}"><DockPanel><ContentControl x:Name="AdjustIcon" Width="16" Height="16" Margin="0,0,10,0"/>
-     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"><Border x:Name="HexSwatch" Width="14" Height="14" CornerRadius="4.5" BorderBrush="{DynamicResource Edge}" BorderThickness=".5"/></StackPanel>
-     <TextBlock Text="编辑壁纸" VerticalAlignment="Center"/></DockPanel></Button>
-    <!-- 壁纸背景: what fills the screen around the photo, the same for every photo (also switchable on 编辑图片) -->
+    <!-- 壁纸背景: what fills the screen around the photo, the same for every photo -->
     <Border Height="40" Padding="12,0" Background="Transparent" ToolTip="图片周围的背景：纯色、边缘延展，或图片本身模糊放大的氛围"><DockPanel><ContentControl x:Name="BackgroundIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
      <Border DockPanel.Dock="Right" CornerRadius="8" Background="{DynamicResource Fill}" Padding="2" VerticalAlignment="Center">
       <UniformGrid x:Name="BackgroundSeg" Columns="3" Rows="1"><Button Style="{StaticResource Seg}" Tag="color" Content="纯色" Height="24" Width="44" ToolTip="图片周围是一种颜色"/><Button Style="{StaticResource Seg}" Tag="extend" Content="延展" Height="24" Width="44" ToolTip="图片的边缘向外延展，渐渐融进颜色"/><Button Style="{StaticResource Seg}" Tag="ambient" Content="氛围" Height="24" Width="44" ToolTip="图片本身模糊放大作背景"/></UniformGrid></Border>
@@ -432,114 +428,6 @@
    </Grid>
   </Grid>
 
-  <!-- ================= adjust page (调整图片) ================= -->
-  <Grid x:Name="AdjustPage" Margin="16" Visibility="Collapsed">
-   <Grid.RenderTransform><TranslateTransform/></Grid.RenderTransform>
-   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-   <!-- 自定义 opens the sliders between the preview and the colours; the panel grows upward to make room, so the preview
-        keeps its size and everything above it rises with the panel's top. While it grows this spacer holds the content
-        where it was, and shrinks as the sliders open (ToggleAdjustSliders / GrowPanel). -->
-   <Border x:Name="AdjTopSpacer" Height="0"/>
-   <DockPanel Grid.Row="1" Margin="0,0,0,10">
-    <Button x:Name="AdjustBack" Style="{StaticResource Round}" Background="Transparent" Margin="-6,0,6,0"><ContentControl x:Name="AdjustBackIcon" Width="16" Height="16"/></Button>
-    <StackPanel VerticalAlignment="Center"><TextBlock Text="编辑壁纸" FontSize="14.5" FontWeight="SemiBold"/><TextBlock x:Name="AdjustName" FontSize="12" Foreground="{DynamicResource Ink2}"/></StackPanel>
-   </DockPanel>
-   <!-- a preview of the changes so far, on the background as the desktop shows it (the colour, or the ambience); the
-        file is only written on 保存. A notice shows inside it, at its top. The tool rail is as tall as the preview with
-        the 自定义 sliders closed, and stays so when they open under the preview. -->
-   <Grid Grid.Row="2">
-    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-    <Grid>
-     <Grid.RowDefinitions><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <Border x:Name="AdjustMat" CornerRadius="10" Background="{DynamicResource Fill}" ClipToBounds="True">
-     <Grid>
-      <Border x:Name="AdjustMatAmb" CornerRadius="10" Opacity="0"/>
-      <!-- 延展: the photo's edges flowing into its colour, made for this frame (the photo itself lies exactly over its own copy in it) -->
-      <Border x:Name="AdjustMatExt" CornerRadius="10" Opacity="0"/>
-      <Image x:Name="AdjustPreview" Margin="14" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality">
-       <Image.LayoutTransform><TransformGroup><ScaleTransform x:Name="AdjustMirror"/><RotateTransform x:Name="AdjustTurn"/></TransformGroup></Image.LayoutTransform>
-      </Image>
-      <!-- only for something to read (an error, the delete confirmation, a format that can't be changed) -->
-      <Border x:Name="AdjustNoteBox" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="8" CornerRadius="8" BorderBrush="{DynamicResource Edge}" BorderThickness=".5" Padding="11,6" Visibility="Collapsed" Opacity="0">
-       <TextBlock x:Name="AdjustNote" FontSize="12" TextWrapping="Wrap" TextTrimming="None" TextAlignment="Center"/>
-      </Border>
-     </Grid>
-    </Border>
-     <!-- 自定义: hue, saturation, brightness on a glass strip that grows open under the preview; the preview (and its photo)
-          shrinks to make room, the panel and the tool rail keep their size -->
-   <Border x:Name="AdjSliders" Grid.Row="1" Height="0" Opacity="0" ClipToBounds="True">
-    <Border Margin="0,10,0,0" CornerRadius="10" Background="{DynamicResource Fill}" VerticalAlignment="Top">
-     <StackPanel Margin="10,8,10,8">
-         <Grid x:Name="AdjHue" Height="18" Cursor="Hand" Background="Transparent" ToolTip="色相">
-          <Border Height="10" CornerRadius="5" BorderBrush="#40FFFFFF" BorderThickness=".5">
-           <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-            <GradientStop Color="#FF0000" Offset="0"/><GradientStop Color="#FFFF00" Offset=".167"/><GradientStop Color="#00FF00" Offset=".333"/><GradientStop Color="#00FFFF" Offset=".5"/>
-            <GradientStop Color="#0000FF" Offset=".667"/><GradientStop Color="#FF00FF" Offset=".833"/><GradientStop Color="#FF0000" Offset="1"/></LinearGradientBrush></Border.Background></Border>
-          <Canvas IsHitTestVisible="False"><Ellipse x:Name="AdjHueKnob" Width="16" Height="16" Stroke="White" StrokeThickness="2.2" Canvas.Top="1"><Ellipse.Effect><DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity=".4"/></Ellipse.Effect></Ellipse></Canvas>
-         </Grid>
-         <Grid x:Name="AdjSat" Height="18" Margin="0,4,0,0" Cursor="Hand" Background="Transparent" ToolTip="饱和度">
-          <Border x:Name="AdjSatTrack" Height="10" CornerRadius="5" BorderBrush="#40FFFFFF" BorderThickness=".5"/>
-          <Canvas IsHitTestVisible="False"><Ellipse x:Name="AdjSatKnob" Width="16" Height="16" Stroke="White" StrokeThickness="2.2" Canvas.Top="1"><Ellipse.Effect><DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity=".4"/></Ellipse.Effect></Ellipse></Canvas>
-         </Grid>
-         <Grid x:Name="AdjVal" Height="18" Margin="0,4,0,0" Cursor="Hand" Background="Transparent" ToolTip="明暗">
-          <Border x:Name="AdjValTrack" Height="10" CornerRadius="5" BorderBrush="#40FFFFFF" BorderThickness=".5"/>
-          <Canvas IsHitTestVisible="False"><Ellipse x:Name="AdjValKnob" Width="16" Height="16" Stroke="White" StrokeThickness="2.2" Canvas.Top="1"><Ellipse.Effect><DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity=".4"/></Ellipse.Effect></Ellipse></Canvas>
-         </Grid>
-     </StackPanel>
-    </Border>
-   </Border>
-    </Grid>
-    <!-- turn / flip, then delete: one vertical tool bar, as tall as the preview. The spacing counts the dividers: every
-         gap between two buttons' hover circles is the same unit, and across a divider there are two units with the line
-         in the middle, so the groups read as groups. -->
-    <Border Grid.Column="1" Margin="10,0,0,0" CornerRadius="16" Background="{DynamicResource Fill}" Padding="2,0">
-     <Grid>
-      <Grid.RowDefinitions>
-       <RowDefinition Height=".6*"/><RowDefinition Height="30"/><RowDefinition Height="*"/><RowDefinition Height="30"/>
-       <RowDefinition Height="*"/><RowDefinition Height="1"/><RowDefinition Height="*"/>
-       <RowDefinition Height="30"/><RowDefinition Height="*"/><RowDefinition Height="30"/>
-       <RowDefinition Height="*"/><RowDefinition Height="1"/><RowDefinition Height="*"/>
-       <RowDefinition Height="30"/><RowDefinition Height=".6*"/>
-      </Grid.RowDefinitions>
-      <Button x:Name="AdjRotL" Grid.Row="1" Style="{StaticResource Round}" Width="30" Height="30" Background="Transparent" ToolTip="左转"><ContentControl x:Name="AdjRotLIcon" Width="17" Height="17"/></Button>
-      <Button x:Name="AdjRotR" Grid.Row="3" Style="{StaticResource Round}" Width="30" Height="30" Background="Transparent" ToolTip="右转"><ContentControl x:Name="AdjRotRIcon" Width="17" Height="17"/></Button>
-      <Border Grid.Row="5" Height="1" Width="14" Background="{DynamicResource Hair}"/>
-      <Button x:Name="AdjFlipH" Grid.Row="7" Style="{StaticResource Round}" Width="30" Height="30" Background="Transparent" ToolTip="左右翻转"><ContentControl x:Name="AdjFlipHIcon" Width="17" Height="17"/></Button>
-      <Button x:Name="AdjFlipV" Grid.Row="9" Style="{StaticResource Round}" Width="30" Height="30" Background="Transparent" ToolTip="上下翻转"><ContentControl x:Name="AdjFlipVIcon" Width="17" Height="17"/></Button>
-      <Border Grid.Row="11" Height="1" Width="14" Background="{DynamicResource Hair}"/>
-      <!-- delete, last and apart: a second click (the button fills red) moves the photo to the Recycle Bin -->
-      <Button x:Name="AdjDelete" Grid.Row="13" Style="{StaticResource Round}" Width="30" Height="30" Background="Transparent" Foreground="{DynamicResource Danger}" ToolTip="删除：把原图移到回收站（可以还原）"><ContentControl x:Name="AdjDeleteIcon" Width="17" Height="17"/></Button>
-     </Grid>
-    </Border>   </Grid>
-   <!-- background colour: suggestions (自动 first), then 自定义 (opens hue, saturation, brightness) and the eyedropper;
-        the preview's mat shows it as you go -->
-   <StackPanel Grid.Row="4" Margin="0,10,0,0">
-    <!-- the background, all on this page: 纯色 / 氛围 (the wallpaper background, the same for every photo, as the menu's
-         壁纸背景), then for 纯色 this photo's colour; both are written on 保存 -->
-    <StackPanel Orientation="Horizontal">
-    <Border CornerRadius="8" Background="{DynamicResource Fill}" Padding="2" VerticalAlignment="Center" ToolTip="壁纸背景 · 对所有图片生效">
-     <UniformGrid x:Name="AdjModeSeg" Columns="3" Rows="1"><Button Style="{StaticResource Seg}" Tag="color" Content="纯色" Height="24" Width="38"/><Button Style="{StaticResource Seg}" Tag="extend" Content="延展" Height="24" Width="38"/><Button Style="{StaticResource Seg}" Tag="ambient" Content="氛围" Height="24" Width="38"/></UniformGrid></Border>
-    <TextBlock x:Name="AdjAmbientLine" Text="所有图片都用模糊的图片本身作背景" FontSize="11.5" Foreground="{DynamicResource Ink3}" VerticalAlignment="Center" Margin="10,0,0,0" Visibility="Collapsed"/>
-    <StackPanel x:Name="AdjColorRow" Orientation="Horizontal" Margin="10,0,0,0">
-     <StackPanel x:Name="AdjSuggestions" Orientation="Horizontal" VerticalAlignment="Center"/>
-     <Button x:Name="AdjCustom" Style="{StaticResource Bare}" ToolTip="自定义颜色" VerticalAlignment="Center">
-      <Grid Width="24" Height="24">
-       <Ellipse><Ellipse.Fill><LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#FF4D4D" Offset="0"/><GradientStop Color="#FFD84D" Offset=".25"/><GradientStop Color="#4DD88A" Offset=".5"/><GradientStop Color="#4D8AFF" Offset=".75"/><GradientStop Color="#C64DFF" Offset="1"/></LinearGradientBrush></Ellipse.Fill></Ellipse>
-       <Ellipse x:Name="AdjCustomRing" Stroke="{DynamicResource Ink}" StrokeThickness="0"/>
-      </Grid>
-     </Button>
-     <!-- the eyedropper: one more dot in the row -->
-     <Button x:Name="AdjDropper" Style="{StaticResource Round}" Width="24" Height="24" Margin="7,0,0,0" VerticalAlignment="Center" ToolTip="吸管：在屏幕上取色"><ContentControl x:Name="AdjDropperIcon" Width="13" Height="13"/></Button>
-    </StackPanel>
-    </StackPanel>
-   </StackPanel>
-   <Grid Grid.Row="5" Margin="0,10,0,0">
-    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
-    <Button x:Name="AdjustCancel" Style="{StaticResource Pill}" Content="取消"/>
-    <Button x:Name="AdjustSave" Grid.Column="2" Style="{StaticResource Primary}" Content="保存"/>
-   </Grid>
-  </Grid>
 
   <!-- ================= playlist page ================= -->
   <Grid x:Name="PlaylistPage" Margin="16" Visibility="Collapsed">

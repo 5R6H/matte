@@ -76,20 +76,6 @@ partial class App {
  [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct SHFILEOPSTRUCT{public IntPtr hwnd;public uint wFunc;public string pFrom;public string pTo;public ushort fFlags;public bool fAnyOperationsAborted;public IntPtr hNameMappings;public string lpszProgressTitle;}
  [DllImport("shell32.dll",CharSet=CharSet.Unicode)] static extern int SHFileOperation(ref SHFILEOPSTRUCT op);
  static void Recycle(string path){if(string.IsNullOrEmpty(path)||!File.Exists(path))return;var op=new SHFILEOPSTRUCT{wFunc=3,pFrom=path+"\0\0",fFlags=0x40|0x10};int rc=SHFileOperation(ref op);if(rc!=0||op.fAnyOperationsAborted)throw new IOException("无法将文件移到回收站: "+Path.GetFileName(path));}
- void DeleteCurrentWallpaper(){DeleteCurrentWallpaper(false);}
- // confirmed: the panel's 编辑壁纸 page already asked (its button needs a second click), so no dialog
- void DeleteCurrentWallpaper(bool confirmed){
-  if(string.IsNullOrEmpty(currentSourcePath)||!File.Exists(currentSourcePath)){if(!confirmed)MessageBox.Show("当前没有可删除的壁纸。","删除壁纸",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
-  string source=currentSourcePath, map=SpatialPathFor(source), display=DisplayPath(source);
-  if(map==null){string any;if(spatialFiles.TryGetValue(source,out any)&&File.Exists(any))map=any;}   // an outdated one goes too
-  string name=Path.GetFileName(source);if(!confirmed&&MessageBox.Show("确定把当前壁纸移到回收站吗？\n\n"+name+"\n位于："+Path.GetFileName(Path.GetDirectoryName(source))+" 文件夹\n\n这会删除文件夹里的原图（可从回收站恢复），不只是从播放列表移除。对应的 Spatial 文件也会一起移入回收站。","删除当前壁纸",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
-  try{
-   DeleteAmbient(display);   // before the photo goes (its key needs the file); a copy made from it, not the photo
-   Recycle(source);if(!string.Equals(display,source,StringComparison.OrdinalIgnoreCase))Recycle(display);if(!string.IsNullOrEmpty(map))Recycle(map);
-   slideFiles.RemoveAll(p=>string.Equals(p,source,StringComparison.OrdinalIgnoreCase));spatialSlides.RemoveAll(p=>string.Equals(p,source,StringComparison.OrdinalIgnoreCase));spatialFiles.Remove(source);spatialFiles.Remove(display);currentSourcePath=null;last="";
-   if(slideFiles.Count==0){ShowEmpty();return;}AdvanceSlide();   // the last photo gone: the empty state
-  }catch(Exception e){Log("Delete wallpaper: "+e.Message);MessageBox.Show("删除失败：\n"+e.Message,"删除壁纸",MessageBoxButtons.OK,MessageBoxIcon.Error);}
- }
  // History for 上一张 / 下一张: back = photos shown before the current one; ahead = photos stepped back over (下一张 replays them).
  readonly List<string> slideBack=new List<string>(),slideAhead=new List<string>();uint shownColor;
  // Spatial 3D is a preference for the whole list, not a filter: every photo plays, in 3D when it has an up-to-date
@@ -129,7 +115,7 @@ partial class App {
  // Every 2 s (App.Check): a second start of Matte asks for the panel (show.request), and the next photo when it is due.
  void CheckRequests(){
   string f=Path.Combine(Dir,"show.request");if(File.Exists(f)){try{File.Delete(f);}catch{}TogglePanel(false);}
-  if(!EditingPhoto&&!holdSlide&&DateTime.Now>=nextSlide){try{AdvanceSlide();}catch(Exception e){Log("Slideshow: "+e.Message);nextSlide=DateTime.Now.AddMilliseconds(settings.Interval);}}
+  if(!holdSlide&&DateTime.Now>=nextSlide){try{AdvanceSlide();}catch(Exception e){Log("Slideshow: "+e.Message);nextSlide=DateTime.Now.AddMilliseconds(settings.Interval);}}
  }
  // A small decoded copy for the menu card, so the full image is not kept in memory.
  static Image Thumb(string path){

@@ -59,17 +59,11 @@ partial class App {
   panel.Deactivated+=delegate{if(!dropping)panel.Dispatcher.BeginInvoke(new Action(()=>{if(!dropping&&!panel.IsActive)AutoHide();}));};
   // While a screenshot is being taken (Win+Shift+S) the panel stays; once focus moves anywhere else, it closes as usual.
   snipWatch=new System.Windows.Threading.DispatcherTimer{Interval=TimeSpan.FromMilliseconds(300)};snipWatch.Tick+=delegate{if(!PanelOpen||panel.IsActive){snipWatch.Stop();return;}if(!Snipping())AutoHide();};
-  panel.PreviewKeyDown+=(s,e)=>{if(e.Key==System.Windows.Input.Key.Escape){if(previewPicking)EndPreviewPick(false);else if(page=="spatialfiles"||page=="spatialstore")GoPage("spatial",-1);else if(page=="sharp")LeaveSharp();else if(page=="playlist"){GoPage("menu",-1);RefreshPanel();}else if(page=="settings"||page=="adjust"||page=="spatial"){GoPage("menu",-1);RefreshPanel();}else HidePanel();e.Handled=true;}};
+  panel.PreviewKeyDown+=(s,e)=>{if(e.Key==System.Windows.Input.Key.Escape){if(page=="spatialfiles"||page=="spatialstore")GoPage("spatial",-1);else if(page=="sharp")LeaveSharp();else if(page=="playlist"){GoPage("menu",-1);RefreshPanel();}else if(page=="settings"||page=="spatial"){GoPage("menu",-1);RefreshPanel();}else HidePanel();e.Handled=true;}};
   CreateBackdrop();
   // icons
   Icon("PrevIcon",IPrev);Icon("PlayIcon",IPause);Icon("NextIcon",INext);Icon("PrefsIcon",IGear);Icon("SpatialIcon",ICube);
-  Icon("AdjustIcon",ICrop);Icon("AdjustBackIcon",IBack);Icon("AdjRotLIcon",IRotL);Icon("AdjRotRIcon",IRotR);Icon("AdjFlipHIcon",IFlipH);Icon("AdjFlipVIcon",IFlipV);Icon("AdjDeleteIcon",ITrash);Icon("AdjDropperIcon",IDropper);
   Click("OrderBtn",()=>{SetOrder(Sequential?"shuffle":"sequential");RefreshPanel();});
-  Click("AdjustRow",()=>{RefreshAdjust(null);GoPage("adjust",1);});
-  Click("AdjustBack",()=>GoPage("menu",-1));Click("AdjustCancel",()=>GoPage("menu",-1));Click("AdjustSave",SaveAdjust);
-  Click("AdjRotL",()=>AdjustPhoto(PhotoEdit.RotateLeft));Click("AdjRotR",()=>AdjustPhoto(PhotoEdit.RotateRight));
-  Click("AdjFlipH",()=>AdjustPhoto(PhotoEdit.FlipHorizontal));Click("AdjFlipV",()=>AdjustPhoto(PhotoEdit.FlipVertical));
-  Click("AdjDelete",DeleteFromPanel);
   Icon("ExitIcon",IExit);Icon("BatteryIcon",IBattery);Icon("StartupIcon",IPower);
   Icon("SettingsIcon",IContrast);Icon("SettingsBackIcon",IBack);Icon("SpatialBackIcon",IBack);Icon("PlaylistBackIcon",IBack);
   Icon("WallFolderIcon",IFolder);Icon("AddFolderIcon",IFolder);Icon("AddImagesIcon",IImage);
@@ -77,7 +71,7 @@ partial class App {
   Click("PrefsRow",()=>{RefreshPrefs();GoPage("settings",1);});
   Click("BatteryRow",()=>{SetBatteryFlat(!flatOnBattery);RefreshPrefs();});
   Click("StartupRow",()=>{string why=SetStartup(!StartupOn);RefreshPrefs();if(why!=null)Log("Startup: "+why);});
-  Click("AdjDropper",TogglePreviewPick);HookPreviewPick();Click("AdjCustom",()=>ToggleAdjustSliders());foreach(Button b in P<System.Windows.Controls.Primitives.UniformGrid>("AdjModeSeg").Children){var mode=(string)b.Tag;b.Click+=delegate{SetAdjustMode(mode);AdjustChanged();};}HookAdjustSliders();
+  
   Click("SettingsBack",()=>GoPage("menu",-1));
   HookCard();
   Click("PlaylistBack",()=>{GoPage("menu",-1);RefreshPanel();});
@@ -144,7 +138,7 @@ partial class App {
   if(panel==null)CreatePanel();
   LoadSpatialCatalog();page="menu";
   Settle(P<StackPanel>("MenuPage"),true);
-  foreach(var p in new FrameworkElement[]{P<Grid>("SettingsPage"),P<Grid>("PlaylistPage"),P<Grid>("AdjustPage"),P<Grid>("SpatialPage"),P<Grid>("SpatialFilesPage"),P<Grid>("SpatialStorePage"),P<Grid>("SharpPage")}){Settle(p,false);p.Visibility=Visibility.Collapsed;}
+  foreach(var p in new FrameworkElement[]{P<Grid>("SettingsPage"),P<Grid>("PlaylistPage"),P<Grid>("SpatialPage"),P<Grid>("SpatialFilesPage"),P<Grid>("SpatialStorePage"),P<Grid>("SharpPage")}){Settle(p,false);p.Visibility=Visibility.Collapsed;}
   ApplyPanelStyle();
   RefreshPanel();
   panel.Left=-20000;panel.Top=-20000;panel.Show();panel.UpdateLayout();
@@ -222,12 +216,11 @@ partial class App {
   change();
   if(shot!=null){var s=shot;Animate(s,UIElement.OpacityProperty,1,0,380,delegate{root.Children.Remove(s);});}
  }
- void HidePanel(){if(panel==null||!panel.IsVisible)return;if(page=="adjust"){EditingEnded();CloseSlidersNow();}panelTick.Stop();panel.Hide();UpdateTray();}
+ void HidePanel(){if(panel==null||!panel.IsVisible)return;panelTick.Stop();panel.Hide();UpdateTray();}
 
  // ------------------------------------------------------------ menu page
  void RefreshPanel(){
   if(panel==null)return;
-  Color c=Colors.Gray;try{var d=Unpack(wall.GetBackgroundColor());c=Color.FromRgb(d.R,d.G,d.B);}catch{}
   string source=currentSourcePath;bool empty=source==null;
   // empty state: no photo on the card, a word on why, and the way to the playlist
   P<TextBlock>("WallName").Text=!empty?System.IO.Path.GetFileNameWithoutExtension(source):Playlist.Count==0?"播放列表是空的":"没有可播放的图片";
@@ -241,12 +234,9 @@ partial class App {
   RefreshSettings();P<Border>("CardHit").ToolTip="播放列表 · "+Playlist.Count+" 项";P<TextBlock>("TimerText").Text=IntervalShort(settings.Interval);
   // Spatial on, but nothing on the playlist has a Spatial file yet: the photos play flat, and this says why
   RefreshSpatialNote();
-  // the colour this photo is set to (its target), not the desktop's colour of the moment, which may be mid-fade
-  var target=Unpack(shownColor);SetSwatch(shownColor==0?c:Color.FromRgb(target.R,target.G,target.B));PaintAmbientSwatch();
   P<Button>("PrevBtn").IsEnabled=!empty&&slideBack.Count>0;
   SetSwitch(spatialEnabled);   // the row stays enabled: its page is where 3D files get made
   RefreshCube();
-  P<Button>("AdjustRow").IsEnabled=source!=null;
   RefreshSpatialBadge(source);
   bool seq=Sequential;Icon("OrderIcon",seq?ISequential:IShuffle);P<Button>("OrderBtn").ToolTip=seq?"按顺序播放 · 点一下改为随机":"随机播放 · 点一下改为按顺序";
   // stay / play
@@ -271,7 +261,7 @@ partial class App {
   if(string.Equals(path,coverPath,StringComparison.OrdinalIgnoreCase))return;coverPath=path;
   Task.Run(()=>Cover(path)).ContinueWith(t=>panel.Dispatcher.BeginInvoke(new Action(()=>{
    if(t.Result==null||coverPath!=path)return;var a=P<Image>("Cover");var b=P<Image>("CoverB");
-   if(a.Source==null){a.Source=t.Result;PaintAmbientSwatch();return;}PaintAmbientSwatchFrom(t.Result);
+   if(a.Source==null){a.Source=t.Result;return;}
    b.Source=t.Result;Animate(b,UIElement.OpacityProperty,0,1,500,delegate{if(b.Source==t.Result){a.Source=t.Result;b.BeginAnimation(UIElement.OpacityProperty,null);b.Opacity=0;}});})));
  }
  // The card (cover, name, folder, 3D · time) opens the playlist: on hover it lights up as a panel and a chevron shows
@@ -321,15 +311,6 @@ partial class App {
    Animate(s,ScaleTransform.ScaleXProperty,s.ScaleX,ts,240);Animate(s,ScaleTransform.ScaleYProperty,s.ScaleY,ts,240);Animate(tr,TranslateTransform.YProperty,tr.Y,ty,240);
    Animate(b,UIElement.OpacityProperty,b.Opacity,on?1:0,on?200:160);}
  }
- // On its ambience, the 编辑图片 row's swatch shows the photo (blurred by its size) instead of a colour.
- void PaintAmbientSwatch(){PaintAmbientSwatchFrom(P<Image>("Cover").Source as BitmapSource);}
- void PaintAmbientSwatchFrom(BitmapSource cover){
-  string s=currentSourcePath;if(s==null||cover==null)return;
-  bool amb=AmbientDefault;
-  if(amb)P<Border>("HexSwatch").Background=new ImageBrush(cover){Stretch=Stretch.UniformToFill};
- }
- void SetSwatch(Color c){var sw=P<Border>("HexSwatch");var brush=sw.Background as SolidColorBrush;
-  if(brush!=null&&brush.Color==c)return;sw.Background=Fading(brush==null?c:brush.Color,c,600);}
  // Monochrome switch, always a white knob: on = brighter translucent track, off = faint track; colour and knob animate.
  bool? switchOn;
  // The photo's deep tone (Backdrop.Ambience): text and icons on white buttons, and the switch knob when on.
@@ -362,16 +343,6 @@ partial class App {
 
  // ------------------------------------------------------------ colour helpers
  bool dropping;   // a dialog or popup of the panel's own is open: losing focus to it does not hide the panel
- // Shows a colour on the desktop now: the Windows background colour, and the Spatial scene's matte when one is up.
- void ShowColor(Color c){var d=SD.Color.FromArgb(c.R,c.G,c.B);try{wall.SetBackgroundColor(Pack(d));}catch(Exception e){Log("Show colour: "+e.Message);}if(spatialDesktop!=null)spatialDesktop.SetColor(d);}
- // Three starting points: the automatic colour (the one that meets the picture's edge most smoothly), then two from
- // the photo's own colour palette, chosen to be clearly different from it and from each other.
- static List<Tuple<string,Color>> Suggest(string display){
-  var model=ColorModel.Load(display,ScreenAspect);var classic=Unpack(Analyze(display));var auto=model.Auto(classic).Color;
-  var list=new List<Tuple<string,SD.Color>>{Tuple.Create("自动 · 与图片边缘最融合",auto)};
-  foreach(var c in Palette.Pick(display,auto,2))list.Add(Tuple.Create("图片色板",c));
-  return list.Select(x=>Tuple.Create(x.Item1,Color.FromRgb(x.Item2.R,x.Item2.G,x.Item2.B))).ToList();
- }
  // ------------------------------------------------------------ motion + helpers
  // Pages slide 28 px and cross-fade; the panel itself keeps its size (both pages are measured, see GlassPanel.xaml).
  // The page that leaves stops taking clicks at once (it sits on top while it fades) and is hidden when its fade ends.
@@ -417,15 +388,9 @@ partial class App {
   ICube="M12 3l8 4.5v9L12 21l-8-4.5v-9z M4 7.5l8 4.5 8-4.5M12 12v9",IOpen="M13.5 4.5h6v6M19.5 4.5L11 13M17 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 4 18.5v-10A1.5 1.5 0 0 1 5.5 7H10",
   ITrash="M4.5 7h15M9.5 7V5h5v2M6.5 7l.9 12.2a1.5 1.5 0 0 0 1.5 1.3h6.2a1.5 1.5 0 0 0 1.5-1.3L17.5 7",IExit="M10 4.5H6a1.5 1.5 0 0 0-1.5 1.5v12A1.5 1.5 0 0 0 6 19.5h4M14 8l4 4-4 4M18 12H9",
   ILock="M7.6 10.5h8.8a2.6 2.6 0 0 1 2.6 2.6v4.8a2.6 2.6 0 0 1-2.6 2.6H7.6A2.6 2.6 0 0 1 5 17.9v-4.8a2.6 2.6 0 0 1 2.6-2.6z M8 10.5V8a4 4 0 0 1 8 0v2.5",IBack="M14.5 6l-6 6 6 6",
-  IDropper="M13.6 6.4l4 4 M15.2 4.8a2.6 2.6 0 0 1 3.7 0l.3.3a2.6 2.6 0 0 1 0 3.7l-1.6 1.6-4-4z M14.6 9.4L6.9 17.1 5 19l-.6-.6.5-2.3 7.7-7.7",
   IPrev="M18.5 5.5l-9 6.5 9 6.5z M5.5 5.5v13",
   
   IList="M9 6.5h11M9 12h11M9 17.5h11 M4.6 6.5h.1M4.6 12h.1M4.6 17.5h.1",IChevron="M9.5 6l6 6-6 6",IClose="M7 7l10 10M17 7L7 17",
-  // 调整图片: a picture with a turning arrow (rotate / flip), not a crop mark
-  ICrop="M4 10.5A1.5 1.5 0 0 1 5.5 9h7A1.5 1.5 0 0 1 14 10.5v8a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 4 18.5z M10 4.5h1.5a7 7 0 0 1 7 7v1.5 M16 10.5l2.5 2.5 2.5-2.5",
-  IRotL="M4.8 10A7.6 7.6 0 1 1 6.3 16 M4.5 4.8v5.4h5.4",IRotR="M19.2 10A7.6 7.6 0 1 0 17.7 16 M19.5 4.8v5.4h-5.4",
-  // the mirror line dashed and the two halves kept apart from it, so they read as two shapes, not one
-  IFlipH="M12 4v2 M12 11v2 M12 18v2 M8 6L3 18h5 M16 6l5 12h-5",IFlipV="M4 12h2 M11 12h2 M18 12h2 M18 8L6 3v5 M18 16L6 21v-5",
   IShuffle="M4 7h3.2c1.8 0 2.9.9 4.1 2.9l1.4 2.2c1.2 2 2.3 2.9 4.1 2.9H20 M4 17h3.2c1.2 0 2.1-.4 2.9-1.3 M13.9 8.3c.8-.9 1.7-1.3 2.9-1.3H20 M17.5 4.5L20 7l-2.5 2.5 M17.5 14.5L20 17l-2.5 2.5",
   ISequential="M4 7h12 M4 12h12 M4 17h7 M15 14.5l4 2.5-4 2.5",
   IBattery="M5 7.5h11.5A1.5 1.5 0 0 1 18 9v6a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 15V9A1.5 1.5 0 0 1 5 7.5z M21 10.5v3 M7 10.5v3",

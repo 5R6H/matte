@@ -10,7 +10,7 @@ Portrait photos on a landscape screen usually end up with black bars or a crop. 
 - **Extend**: the photo's edges flow outward and dissolve into that colour. It uses a harmonic (membrane) fill, the maths behind seamless cloning, so nothing gets stretched into streaks.
 - **Ambient**: the photo itself, enlarged and blurred like frosted acrylic.
 
-Around that sits a quiet tray app: synchronized cross-fades between photos, a panel that takes its colours from the wallpaper, playlists of folders and single photos, shuffle or in-order playback, and in-place rotate, flip and delete.
+Around that sits a quiet tray app: synchronized cross-fades between photos, a panel that takes its colours from the wallpaper, playlists of folders and single photos, shuffle or in-order playback.
 
 ### Spatial 3D (optional)
 
