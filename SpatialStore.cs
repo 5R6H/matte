@@ -15,14 +15,14 @@ partial class App {
  StoreInfo storeInfo;int storeGeneration;System.Windows.Threading.DispatcherTimer storeDisarm;
  StoreInfo ReadStore(){
   var s=new StoreInfo{Dir=SpatialCacheDir};if(!Directory.Exists(s.Dir))return s;
-  foreach(var f in new DirectoryInfo(s.Dir).GetFiles("*.spatial")){s.Files++;s.Bytes+=f.Length;}
+  var catalog=SpatialCatalog.Load(s.Dir,new string[0],null);s.Files=catalog.Legacy+catalog.Valid;s.Bytes=catalog.Bytes;
   long ob=0;foreach(var d in (settings.SpatialStoreOld??new List<string>()).Where(Directory.Exists))try{ob+=new DirectoryInfo(d).EnumerateFiles("*",SearchOption.AllDirectories).Sum(x=>x.Length);}catch{}storeOldBytes=ob;
   return s;
  }
  long storeOldBytes;
  // 存储与清理 opened: its figures, and a sweep (whose end shows its result with RefreshStoreView, never another sweep:
  // that was a loop, sweeping the whole library again and again while the page stayed open)
- void RefreshStore(){RefreshStoreView();RunSpatialSweep();}
+ void RefreshStore(){RefreshStoreView();RunSpatialSweep(false,true);}
  void RefreshStoreView(){
   if(panel==null)return;int g=++storeGeneration;
   if(storeInfo==null)P<TextBlock>("StoreTotal").Text="正在统计…";
@@ -41,21 +41,33 @@ partial class App {
   P<TextBlock>("StoreDefaultPath").Text=DefaultSpatialCacheDir.Replace(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"%LOCALAPPDATA%");
   PaintSweep();PaintStoreSharp();
  }
- // ---- legacy inventory (SpatialIndex.Sweep), off the UI thread
+ // ---- legacy inventory and conservative v1 retention, off the UI thread
  int sweepsStarted;   // how many sweeps this run has started (the regression test for the loop counts them)
- bool sweeping;DateTime lastSweep=DateTime.Now.AddHours(-6).AddMinutes(1);SpatialIndex.Result sweepResult;
- void RunSpatialSweep(){
+ bool sweeping;DateTime lastSweep=DateTime.Now.AddHours(-6).AddMinutes(1);SpatialIndex.Result sweepResult;SpatialRetention.Result retentionResult;
+ System.Threading.CancellationTokenSource sweepCancel;
+ internal SpatialRetention.IO retentionIO; // tests can pause a real scan between photo reads
+ string lastSweepStore;
+ void RunSpatialSweep(bool afterGeneration=false,bool pageOpened=false){
   if(sweeping||Generating||storeMoving||settings==null||ui==null)return;   // (no ui window: not the running app, e.g. a test)
-  sweeping=true;lastSweep=DateTime.Now;sweepsStarted++;
-  var dispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;
+  string store=SpatialCacheDir;
+  if(!afterGeneration&&lastSweepStore==store&&(DateTime.Now-lastSweep).TotalHours<(pageOpened?1:6))return;
+  sweeping=true;lastSweep=DateTime.Now;lastSweepStore=store;sweepsStarted++;
+  var cancel=sweepCancel=new System.Threading.CancellationTokenSource();
+  var dispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;string[] roots=PlaylistEntries().ToArray();
   Task.Run(()=>{
-   var photos=new List<string>(SourceImages());
-   return SpatialIndex.Sweep(SpatialCacheDir,photos.Distinct(StringComparer.OrdinalIgnoreCase),Log,DateTime.Now);
+   var io=retentionIO??new SpatialRetention.IO();io.Cancelled=()=>cancel.IsCancellationRequested;
+   var retained=SpatialRetention.Sweep(store,roots,Recycle,Log,DateTime.UtcNow,io);
+   if(cancel.IsCancellationRequested)return Tuple.Create<SpatialIndex.Result,SpatialRetention.Result>(null,retained);
+   var photos=new List<string>();foreach(string photo in SourceImages()){if(cancel.IsCancellationRequested)break;photos.Add(photo);}
+   var legacy=SpatialIndex.Sweep(store,photos.Distinct(StringComparer.OrdinalIgnoreCase),Log,DateTime.Now);
+   return Tuple.Create(legacy,retained);
   }).ContinueWith(t=>dispatcher.BeginInvoke(new Action(()=>{
-   sweeping=false;
-   if(t.Exception!=null){Log("Spatial sweep: "+t.Exception.InnerException.Message);return;}if(t.Result==null)return;
-   sweepResult=t.Result;
+   sweeping=false;sweepCancel=null;cancel.Dispose();
+   try{if(t.Exception!=null){Log("Spatial sweep: "+t.Exception.InnerException.Message);return;}if(t.Result==null)return;
+   if(t.Result.Item1!=null)sweepResult=t.Result.Item1;if(!t.Result.Item2.Skipped)retentionResult=t.Result.Item2;
+   if(t.Result.Item2.RecycledPairs>0||t.Result.Item2.QuarantinedThisSweep>0)LoadSpatialCatalog();
    if(panel!=null&&PanelOpen){if(page=="spatialstore")RefreshStoreView();PaintSweep();}
+   }finally{ResumeQueuedGeneration();}
   })));
  }
  void PaintSweep(){

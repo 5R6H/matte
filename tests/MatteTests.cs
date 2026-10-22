@@ -36,11 +36,17 @@ partial class App {
  internal void TestInit(){InitSlideshow();}
  internal MatteSettings TestSettings{get{return settings;}set{settings=value;}}
  internal int TestSweeps{get{return sweepsStarted;}}
+ internal void TestRefreshStore(){RefreshStore();}
+ internal bool TestSweeping{get{return sweeping;}}
+ internal SpatialRetention.Result TestRetention{get{return retentionResult;}}
+ internal string TestStartGeneration(){return StartGeneration();}
+ internal void TestSweepAge(double hours){lastSweep=DateTime.Now.AddHours(-hours);}
+ internal void TestSweep(bool after=false){RunSpatialSweep(after);}
  internal void TestOpenStore(){
   ui=new MessageWindow();CreatePanel();panel.ShowActivated=false;panel.ShowInTaskbar=false;panel.Left=-20000;panel.Top=-20000;panel.Show();
   page="spatialstore";RefreshStore();
  }
- internal void TestClose(){CancelSlideRequests();ReleaseDisplayPins();PinWallpaper(null);System.Threading.Interlocked.Increment(ref catalogRequest);if(panel!=null)panel.Close();if(ui!=null)ui.Dispose();}
+ internal void TestClose(){genQueued=false;if(sweepCancel!=null)sweepCancel.Cancel();CancelSlideRequests();ReleaseDisplayPins();PinWallpaper(null);System.Threading.Interlocked.Increment(ref catalogRequest);if(panel!=null)panel.Close();if(ui!=null)ui.Dispose();}
  internal void TestCatalog(SpatialCatalog catalog,params string[] photos){ApplySpatialCatalog(catalog,photos.Select(p=>Tuple.Create(p,new List<string>{p})).ToList(),true);}
  internal string TestSpatialPath(string path){return SpatialPathFor(path);}
  internal int TestSpatialSlides{get{return spatialSlides.Count;}}
@@ -104,10 +110,11 @@ static class MatteTests {
   if(args.Contains("--catalog")){CatalogTests();return failures;}
   if(args.Contains("--attach")){AttachTests();CacheTests();return failures;}
   if(args.Contains("--cache")){CacheTests();return failures;}
+  if(args.Contains("--retention")){RetentionTests();return failures;}
   IdentityTests();if(args.Contains("--identity"))return failures;
   StoreTests();
   LockTests();
-  CatalogTests();AttachTests();CacheTests();
+  CatalogTests();AttachTests();CacheTests();RetentionTests();
   // ② the store page's sweep runs once, not again and again
   Run("2 store page sweeps once",()=>{
    string photos=Fresh("store-photos");for(int i=0;i<3;i++)Solid(Path.Combine(photos,"p"+i+".jpg"),Color.FromArgb(40*i,90,140),64,48,1);
@@ -723,6 +730,117 @@ exit 0
  static void Bmp(string path,Color color){using(var b=new Bitmap(32,24)){using(var g=Graphics.FromImage(b))g.Clear(color);b.Save(path,ImageFormat.Bmp);}}
  static bool Writable(string path){try{using(var s=new FileStream(path,FileMode.Open,FileAccess.Write,FileShare.ReadWrite|FileShare.Delete)){}return true;}catch(IOException){return false;}}
  [System.Runtime.InteropServices.DllImport("kernel32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode,SetLastError=true)]static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string path,uint access,uint share,IntPtr security,uint creation,uint flags,IntPtr template);
+ static DateTime RetentionNow{get{return new DateTime(2026,10,23,1,0,0,DateTimeKind.Utc);}}
+ static SpatialRetention.Result Retain(string store,IEnumerable<string> roots,DateTime now,SpatialRetention.IO io=null,Action<string> recycle=null){string locks=Path.Combine(Path.GetDirectoryName(store),"locks");return SpatialRetention.Sweep(store,roots,recycle??File.Delete,e=>{},now,io,Path.Combine(locks,"generator.lock"),Path.Combine(locks,"store.lock"));}
+ static string RetentionKey(string artifact){return Path.GetFileName(Path.GetDirectoryName(artifact))+"/"+Path.GetFileNameWithoutExtension(artifact);}
+ static void RetentionTests(){
+  Run("T2d rename copy and history-only photos prove use",()=>{
+   string root=Fresh("d-rename"),store=Path.Combine(root,"store"),photos=Path.Combine(root,"photos");Directory.CreateDirectory(photos);string photo=Path.Combine(photos,"a.jpg");File.WriteAllBytes(photo,new byte[]{1,2,3});string artifact=CatalogPair(store,photo);var now=RetentionNow;
+   var first=Retain(store,new[]{photos},now);Check(first.InUse==1&&first.Complete&&first.LastCompleteScan==now,"initial complete use missing");string renamed=Path.Combine(photos,"renamed.jpg"),copy=Path.Combine(photos,"copy.jpg");File.Move(photo,renamed);File.Copy(renamed,copy);
+   var r=Retain(store,new[]{photos},now.AddDays(40));Check(r.InUse==1&&r.Missing==0&&File.Exists(artifact),"renamed/copied photo was missed");var h=SpatialRetention.Load(store,now.AddDays(40));var rec=h.pairs[RetentionKey(artifact)];Check(rec.locations.ContainsKey(photo)&&rec.locations.ContainsKey(renamed)&&rec.locations.ContainsKey(copy),"source location history was lost");Check(rec.missingSince==null,"in-use pair has missing clock");
+   r=Retain(store,new string[0],now.AddDays(80));Check(r.InUse==1&&r.Recycled==0,"history locations were not scanned");
+  });
+  Run("R15 usable hints avoid all 300 photo hashes",()=>{
+   string root=Fresh("d-hints"),store=Path.Combine(root,"store"),photos=Path.Combine(root,"photos");Directory.CreateDirectory(photos);var paths=new List<string>();
+   for(int i=0;i<300;i++){string p=Path.Combine(photos,i+".jpg");File.WriteAllBytes(p,new byte[]{(byte)i,(byte)(i>>8),1});paths.Add(p);CatalogPair(store,p);}
+   SpatialCatalog.Load(store,paths,null).Complete(()=>false);int hashes=0;var io=new SpatialRetention.IO{Hash=p=>{hashes++;return CatalogHash(File.ReadAllBytes(p));}};
+   var r=Retain(store,new[]{photos},RetentionNow,io);Check(r.Complete&&r.InUse==300&&r.Missing==0&&hashes==0,"hinted library was rehashed: "+hashes);
+   Check(SpatialRetention.Load(store,RetentionNow).pairs.Values.All(x=>x.locations.Count==1&&x.missingSince==null),"hinted locations not retained");
+  });
+  Run("R15 stale positive only delays cleanup and never proves absence",()=>{
+   string root=Fresh("d-stale"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.jpg"),gone=Path.Combine(root,"gone.jpg");File.WriteAllBytes(photo,new byte[]{1,2,3});string old=CatalogPair(store,photo);SpatialCatalog.Load(store,new[]{photo},null).Complete(()=>false);var stamp=SpatialCatalog.Probe(photo);
+   File.WriteAllBytes(photo,new byte[]{4,5,6});File.SetLastWriteTimeUtc(photo,new DateTime(stamp.mtimeTicks,DateTimeKind.Utc));Check(SpatialCatalog.Probe(photo).fileId==stamp.fileId,"stale index fixture changed file id");string current=CatalogPair(store,photo);
+   File.WriteAllBytes(gone,new byte[]{7,8,9});string absent=CatalogPair(store,gone);File.Delete(gone);
+   var r=Retain(store,new[]{photo},RetentionNow);var h=SpatialRetention.Load(store,RetentionNow);
+   Check(r.Missing==1&&r.InUse==2&&h.pairs[RetentionKey(current)].missingSince==null,"hint was used to prove absence of the replacement source");
+   Check(h.pairs[RetentionKey(old)].missingSince==null&&h.pairs[RetentionKey(absent)].missingSince!=null,"stale positive did not retain old pair or unhinted absence was missed");
+   r=Retain(store,new[]{photo},RetentionNow.AddDays(30));Check(File.Exists(old)&&File.Exists(current)&&!File.Exists(absent)&&r.RecycledPairs==1,"hint delayed anything except its own positive pair");
+  });
+  Run("R15 page opens reuse last result and respect sweep intervals",()=>{
+   string root=Fresh("d-throttle"),store=Path.Combine(root,"store");var app=new App(new TestWall()){TestSettings=new MatteSettings{Playlist=new List<string>(),SpatialFolder=store}};
+   try{app.TestOpenStore();Until(()=>!app.TestSweeping,"page sweep unfinished");var result=app.TestRetention;app.TestRefreshStore();Pump(100);Check(app.TestSweeps==1&&app.TestRetention==result,"two page opens started two sweeps");
+    app.TestSweepAge(2);app.TestSweep();Check(app.TestSweeps==1,"periodic sweep ignored six-hour interval");app.TestRefreshStore();Until(()=>!app.TestSweeping,"hour-old page sweep unfinished");Check(app.TestSweeps==2,"page did not refresh after an hour");
+    app.TestSweep(true);Until(()=>!app.TestSweeping,"post-generation sweep unfinished");Check(app.TestSweeps==3,"generation did not bypass throttle");app.TestSweepAge(6.1);app.TestSweep();Until(()=>!app.TestSweeping,"six-hour sweep unfinished");Check(app.TestSweeps==4,"periodic sweep never resumed");
+   }finally{app.TestClose();}
+  });
+  Run("R16 queued generation cancels sweep and starts after lock release",()=>{
+   string root=Fresh("d-queue"),store=Path.Combine(root,"store"),photos=Path.Combine(root,"photos"),source=Path.Combine(root,"source.jpg");Directory.CreateDirectory(photos);
+   File.WriteAllBytes(source,new byte[]{0,0,0});string artifact=CatalogPair(store,source);Retain(store,new string[0],DateTime.UtcNow.AddDays(-40));
+   for(int i=0;i<100;i++)File.WriteAllBytes(Path.Combine(photos,i+".jpg"),new byte[]{(byte)i,1,1});
+   string script=Path.Combine(root,"generate.ps1"),started=Path.Combine(root,"started"),finish=Path.Combine(root,"finish"),failed=Path.Combine(root,"failed");
+   Func<string,string> quote=p=>"'"+p.Replace("'","''")+"'";
+   File.WriteAllText(script,"param($RootsFile,$Cache)\n$ErrorActionPreference='Stop'\ntry { $f=[IO.File]::Open("+quote(SpatialStoreLock.GeneratorPath)+",[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::ReadWrite); $f.Lock(0,1); [IO.File]::WriteAllText("+quote(started)+",'started'); while(!(Test-Path -LiteralPath "+quote(finish)+")){Start-Sleep -Milliseconds 50}; $f.Unlock(0,1); $f.Dispose() } catch { [IO.File]::WriteAllText("+quote(failed)+",'another generation is running'); exit 1 }",new System.Text.UTF8Encoding(true));
+   using(var entered=new System.Threading.ManualResetEventSlim())using(var release=new System.Threading.ManualResetEventSlim()){
+    int hashes=0;var app=new App(new TestWall()){TestSettings=new MatteSettings{Playlist=new List<string>{photos},SpatialFolder=store,SpatialGenerator=script}};
+    app.retentionIO=new SpatialRetention.IO{Hash=p=>{if(System.Threading.Interlocked.Increment(ref hashes)==1){entered.Set();release.Wait(10000);}return CatalogHash(File.ReadAllBytes(p));}};
+    try{app.TestOpenStore();Until(()=>entered.IsSet,"scan did not reach first photo");Check(app.TestStartGeneration()==null,"generation request rejected");
+     Check(app.TestGenerating&&app.TestPanelGenText().Contains("正在整理 3D 图片，整理完自动开始"),"generation started without waiting for sweep");
+     Pump(150);Check(!File.Exists(started)&&!File.Exists(failed),"generator launched while sweep held lock");release.Set();Until(()=>File.Exists(started)||File.Exists(failed),"queued generation did not start",6000);
+     var r=app.TestRetention;Check(!File.Exists(failed)&&r!=null&&r.Cancelled&&!r.Complete&&r.Recycled==0&&hashes==1,"cancelled scan did not stop early before generation");
+     Check(File.Exists(artifact)&&SpatialRetention.Load(store,DateTime.UtcNow).pairs.Values.All(x=>x.missingSince==null),"cancelled scan deleted pair or retained old clock");
+     File.WriteAllText(finish,"done");Until(()=>!app.TestGenerating&&!app.TestSweeping,"generator did not finish",10000);
+    }finally{release.Set();File.WriteAllText(finish,"done");if(app.TestGenerating)app.TestStop();Until(()=>!app.TestGenerating&&!app.TestSweeping,"cleanup unfinished",10000);app.TestClose();}
+   }
+  });
+  Run("R16 cancellation resets clocks without touching quarantine",()=>{
+   string root=Fresh("d-cancel"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.jpg");File.WriteAllBytes(photo,new byte[]{1});string artifact=CatalogPair(store,photo);Retain(store,new string[0],RetentionNow);File.WriteAllBytes(photo,new byte[]{2});
+   string orphan=SpatialIdentity.ArtifactPath(store,new string('b',64),new string('c',64));Directory.CreateDirectory(Path.GetDirectoryName(orphan));File.WriteAllText(orphan,"orphan");
+   string aged=SpatialIdentity.QuarantinePath(store,new string('d',64),new string('e',64),RetentionNow);Directory.CreateDirectory(Path.GetDirectoryName(aged));File.WriteAllText(aged,"aged");
+   bool cancel=false;int recycled=0;var io=new SpatialRetention.IO{Cancelled=()=>cancel,Hash=p=>{cancel=true;return CatalogHash(File.ReadAllBytes(p));}};
+   var r=Retain(store,new[]{photo},RetentionNow.AddDays(40),io,p=>{recycled++;File.Delete(p);});
+   Check(r.Cancelled&&!r.Complete&&recycled==0&&File.Exists(artifact)&&File.Exists(orphan)&&File.Exists(aged),"cancelled sweep mutated a pair or quarantine");
+   Check(SpatialRetention.Load(store,RetentionNow.AddDays(40)).pairs.Values.All(x=>x.missingSince==null),"cancelled sweep preserved missing clocks");
+  });
+  Run("T2d offline resets the entire missing interval",()=>{
+   string root=Fresh("d-offline"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.jpg");File.WriteAllBytes(photo,new byte[]{1});string artifact=CatalogPair(store,photo);var now=RetentionNow;Retain(store,new[]{photo},now);File.Delete(photo);
+   var r=Retain(store,new string[0],now.AddDays(1));Check(r.Missing==1,"online missing file not recorded");bool online=false;var io=new SpatialRetention.IO{DriveThere=p=>online};
+   r=Retain(store,new string[0],now.AddDays(41),io);Check(!r.Complete&&r.Unknown==1&&r.Recycled==0&&File.Exists(artifact),"offline source recycled");Check(r.LastCompleteScan==now.AddDays(1),"incomplete scan changed last complete date");Check(SpatialRetention.Load(store,now.AddDays(41)).pairs[RetentionKey(artifact)].missingSince==null,"incomplete scan kept missing clock");
+   online=true;r=Retain(store,new string[0],now.AddDays(42),io);Check(r.Recycled==0&&r.EarliestClearUtc==now.AddDays(72),"clock did not restart after offline");Retain(store,new string[0],now.AddDays(71),io);Check(File.Exists(artifact),"recycled before new full interval");Retain(store,new string[0],now.AddDays(72),io);Check(!File.Exists(artifact),"continuous complete interval did not clear pair");
+  });
+  foreach(string loss in new[]{"deleted","corrupt","unreadable"})Run("T2d "+loss+" retention starts fresh clocks",()=>{
+   string root=Fresh("d-history-"+loss),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.jpg");File.WriteAllBytes(photo,new byte[]{2});string artifact=CatalogPair(store,photo);var now=RetentionNow;Retain(store,new[]{photo},now);File.Delete(photo);Retain(store,new string[0],now.AddDays(1));string history=Path.Combine(store,"v1","retention.json");
+   if(loss=="deleted")File.Delete(history);else if(loss=="corrupt")File.WriteAllText(history,"bad");else{using(var held=new FileStream(history,FileMode.Open,FileAccess.Read,FileShare.None)){var blocked=Retain(store,new string[0],now.AddDays(40));Check(!blocked.Complete&&blocked.Recycled==0&&File.Exists(artifact),"unreadable history authorized recycling");}}
+   var r=Retain(store,new string[0],now.AddDays(41));Check(r.Recycled==0&&r.EarliestClearUtc==now.AddDays(71),"lost history reused an old date");Retain(store,new string[0],now.AddDays(70));Check(File.Exists(artifact),"lost history interval shorter than 30 days");Retain(store,new string[0],now.AddDays(71));Check(!File.Exists(artifact),"new complete interval did not recycle");
+  });
+  Run("T2d hashes each candidate once across twenty pairs",()=>{
+   string root=Fresh("d-once"),store=Path.Combine(root,"store"),photos=Path.Combine(root,"photos");Directory.CreateDirectory(photos);var paths=new List<string>();for(int i=0;i<500;i++){string p=Path.Combine(photos,i+".jpg");File.WriteAllBytes(p,new byte[]{(byte)i,(byte)(i>>8),7,8});paths.Add(p);}
+   for(int i=0;i<20;i++){string p=Path.Combine(root,"source"+i+".jpg");File.WriteAllBytes(p,new byte[]{(byte)i,0,9,10});CatalogPair(store,p);File.Delete(p);}
+   var calls=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);var io=new SpatialRetention.IO{Hash=p=>{int n;calls.TryGetValue(p,out n);calls[p]=n+1;return CatalogHash(File.ReadAllBytes(p));}};
+   var r=Retain(store,new[]{photos,photos},RetentionNow,io);Check(r.Complete&&r.Missing==20&&calls.Count==500&&calls.Values.All(n=>n==1),"candidate photo hashed more than once per sweep");
+  });
+  Run("T2d held artifact preserves its sidecar and clock",()=>{
+   string root=Fresh("d-held"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.jpg");File.WriteAllBytes(photo,new byte[]{3});string artifact=CatalogPair(store,photo);var now=RetentionNow;Retain(store,new[]{photo},now);File.Delete(photo);Retain(store,new string[0],now.AddDays(1));var attempted=new List<string>();
+   using(var held=new FileStream(artifact,FileMode.Open,FileAccess.Read,FileShare.Read)){var r=Retain(store,new string[0],now.AddDays(31),null,p=>{attempted.Add(p);File.Delete(p);});Check(File.Exists(artifact)&&File.Exists(artifact+".json")&&attempted.SequenceEqual(new[]{artifact}),"sidecar recycled before locked artifact");Check(r.Missing==1&&r.RecycledPairs==0&&r.EarliestClearUtc==now.AddDays(31),"locked pair clock was not kept");}
+   var cleared=Retain(store,new string[0],now.AddDays(32));Check(cleared.RecycledPairs==1&&!File.Exists(artifact)&&!File.Exists(artifact+".json"),"released pair did not recycle");
+  });
+  Run("T2d generation lock skips all sweep work",()=>{
+   string root=Fresh("d-lock"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.jpg");File.WriteAllBytes(photo,new byte[]{4});string artifact=CatalogPair(store,photo),run=Path.Combine(root,"locks","generator.lock");int calls=0;var io=new SpatialRetention.IO{Files=p=>{calls++;return Directory.GetFiles(p);},Hash=p=>{calls++;return CatalogHash(File.ReadAllBytes(p));}};
+   using(SpatialStoreLock.Acquire(run,0)){var watch=System.Diagnostics.Stopwatch.StartNew();var r=Retain(store,new[]{photo},RetentionNow,io,p=>{calls++;File.Delete(p);});Check(r.Skipped&&watch.ElapsedMilliseconds<1000&&calls==0&&!File.Exists(Path.Combine(store,"v1","retention.json")),"sweep ran while generation held its lock");}
+   Check(File.Exists(artifact),"busy sweep mutated artifact");
+  });
+  Run("T2d unsupported retained orphan quarantined and aged by entry date",()=>{
+   string root=Fresh("d-quarantine"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.jpg");File.WriteAllBytes(photo,new byte[]{5});string artifact=CatalogPair(store,photo);File.WriteAllText(artifact+".json","{\"version\":2}");string orphan=SpatialIdentity.ArtifactPath(store,new string('b',64),new string('c',64));Directory.CreateDirectory(Path.GetDirectoryName(orphan));File.WriteAllText(orphan,"orphan");File.SetLastWriteTimeUtc(orphan,RetentionNow.AddYears(-2));
+   string stray=Path.Combine(store,"v1","stray");Directory.CreateDirectory(stray);File.WriteAllText(Path.Combine(stray,Path.GetFileName(orphan)),"untouched");var r=Retain(store,new[]{photo},RetentionNow);string q=SpatialIdentity.QuarantinePath(store,new string('b',64),new string('c',64),RetentionNow);
+   Check(r.Unsupported==1&&File.Exists(artifact)&&File.Exists(artifact+".json"),"unsupported pair was touched");Check(!File.Exists(orphan)&&File.Exists(q)&&r.Quarantined==1&&r.QuarantinedThisSweep==1,"orphan did not enter quarantine");Check(File.Exists(Path.Combine(stray,Path.GetFileName(orphan))),"entered stray v1 directory");
+   Retain(store,new[]{photo},RetentionNow.AddDays(29));Check(File.Exists(q),"quarantine used original old mtime");r=Retain(store,new[]{photo},RetentionNow.AddDays(30));Check(!File.Exists(q)&&r.RecycledQuarantine==1&&File.Exists(artifact),"quarantine not recycled at thirty days or unsupported touched");
+  });
+  Run("T2d incomplete listing and unreadable candidate reset all clocks",()=>{
+   string root=Fresh("d-incomplete"),store=Path.Combine(root,"store"),photos=Path.Combine(root,"photos");Directory.CreateDirectory(photos);string photo=Path.Combine(photos,"a.jpg");File.WriteAllBytes(photo,new byte[]{6});string artifact=CatalogPair(store,photo);Retain(store,new[]{photos},RetentionNow);File.Delete(photo);Retain(store,new[]{photos},RetentionNow.AddDays(1));
+   var io=new SpatialRetention.IO{Files=p=>{if(p==photos)throw new UnauthorizedAccessException();return Directory.GetFiles(p);}};var r=Retain(store,new[]{photos},RetentionNow.AddDays(40),io);Check(!r.Complete&&File.Exists(artifact)&&SpatialRetention.Load(store,RetentionNow.AddDays(40)).pairs.Values.All(x=>x.missingSince==null),"listing failure preserved deletion clock");
+   Retain(store,new[]{photos},RetentionNow.AddDays(41));File.WriteAllBytes(photo,new byte[]{7});io=new SpatialRetention.IO{Hash=p=>{throw new IOException("unreadable");}};r=Retain(store,new[]{photos},RetentionNow.AddDays(80),io);Check(!r.Complete&&r.Unknown==1&&r.Recycled==0&&SpatialRetention.Load(store,RetentionNow.AddDays(80)).pairs.Values.All(x=>x.missingSince==null),"unreadable candidate preserved deletion clock");
+  });
+  Run("T2d reclassifies immediately before recycling",()=>{
+   string root=Fresh("d-reclassify"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.jpg");File.WriteAllBytes(photo,new byte[]{8});string artifact=CatalogPair(store,photo);Retain(store,new string[0],RetentionNow);File.WriteAllBytes(photo,new byte[]{9});
+   var io=new SpatialRetention.IO{Hash=p=>{File.WriteAllText(artifact+".json","{\"version\":2}");return CatalogHash(File.ReadAllBytes(p));}};var r=Retain(store,new[]{photo},RetentionNow.AddDays(30),io);Check(r.RecycledPairs==0&&File.Exists(artifact)&&File.Exists(artifact+".json"),"recycled a pair that became unsupported");
+  });
+  Run("T2d store lock skips and releases the generator lock",()=>{
+   string root=Fresh("d-store-lock"),store=Path.Combine(root,"store"),file=Path.Combine(root,"locks","store.lock"),run=Path.Combine(root,"locks","generator.lock");using(SpatialStoreLock.Acquire(file,0)){var r=Retain(store,new string[0],RetentionNow);Check(r.Skipped&&!Directory.Exists(store),"store lock did not prevent sweep work");using(SpatialStoreLock.Acquire(run,0)){} }
+  });
+  Run("T2d invalid pairs quarantine collision without overwrite",()=>{
+   string root=Fresh("d-collision"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.jpg");File.WriteAllBytes(photo,new byte[]{8});string artifact=CatalogPair(store,photo);File.WriteAllText(artifact+".json","bad");string source=Path.GetFileName(Path.GetDirectoryName(artifact)),recipe=Path.GetFileNameWithoutExtension(artifact),q=SpatialIdentity.QuarantinePath(store,source,recipe,RetentionNow);Directory.CreateDirectory(Path.GetDirectoryName(q));File.WriteAllText(q,"earlier");
+   var r=Retain(store,new[]{photo},RetentionNow);string second=SpatialIdentity.QuarantinePath(store,source,recipe,RetentionNow.AddSeconds(1));Check(File.ReadAllText(q)=="earlier"&&File.Exists(second)&&File.Exists(Path.ChangeExtension(second,".json"))&&!File.Exists(artifact),"quarantine overwrote a recovery or missed invalid pair");Check(r.Quarantined==2,"quarantine pair counted as separate files");
+  });
+ }
  static void CacheTests(){
   Run("R13 flat JPEG slides make no display copies",()=>{
    string root=Fresh("r13-flat"),store=Path.Combine(root,"store");var photos=new List<string>();for(int i=0;i<8;i++){string p=Path.Combine(root,i+".jpg");Solid(p,Color.FromArgb(143+i,32+i,92),64,48,1);photos.Add(p);}

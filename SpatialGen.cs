@@ -28,7 +28,7 @@ partial class App {
  // Busy from a run's start until its end is handled (its output read to the end), not only while its process runs: the
  // generator's last lines can come after it exited, and nothing else (another run, a store move, a sweep) may start then.
  bool genActive,genStuck;   // genStuck: the last run's end could not be confirmed (it may still be running)
- bool Generating{get{return genActive;}}
+ bool Generating{get{return genActive||genQueued;}}
 
  // Hints estimate work; they never certify a photo or disable generation.
  struct Needs{public int Photos,Missing,Unchecked,Errors;public bool RecipeUnknown;}
@@ -69,6 +69,9 @@ partial class App {
  }
  // Returns a message for the panel when it cannot start. only: just this one photo (仅当前这张); otherwise the ticked
  // playlist entries.
+ bool genQueued;string genQueuedOnly;
+ void ResumeQueuedGeneration(){if(!genQueued)return;string only=genQueuedOnly;genQueued=false;genQueuedOnly=null;
+  string why;try{why=StartGeneration(only);}catch(Exception e){why=e.Message;}if(why!=null){genPhase=why;if(panel!=null)GenNoteShow(why);GenChanged();}}
  string StartGeneration(){return StartGeneration(null);}
  string StartGeneration(string only){
   if(Generating)return null;
@@ -77,6 +80,8 @@ partial class App {
   string list=Path.Combine(Dir,"spatial-roots.txt");
   var roots=only!=null?new[]{only}:PlaylistEntries().Where(e=>(File.Exists(e)||Directory.Exists(e))&&!SpatialSkipped(e)).ToArray();
   if(roots.Length==0)return "没有勾选要生成的项目";
+  if(sweeping){genQueued=true;genQueuedOnly=only;genTotal=genDone=genFailed=0;genHeld=genNotice=null;genPhase="正在整理 3D 图片，整理完自动开始";
+   if(sweepCancel!=null)sweepCancel.Cancel();GenChanged();return null;}
   File.WriteAllLines(list,roots,new UTF8Encoding(false));
   genTotal=genDone=genFailed=0;genProgress=new GenProgress();genPhase="正在准备…";genStopped=false;genHeld=null;genNotice=null;
   string why=RunGenerator("powershell.exe","-NoProfile -ExecutionPolicy Bypass -File \""+GeneratorScript+"\" -RootsFile \""+list+"\" -Cache \""+SpatialCacheDir+"\"");
@@ -86,11 +91,12 @@ partial class App {
  }
  void StopGeneration(){
   if(!Generating)return;
+  if(genQueued){genQueued=false;genQueuedOnly=null;genPhase="已停止";GenChanged();return;}
   if(genStuck){   // its end could not be confirmed: end its job once more, and let go if it is empty now
    GenJob.Terminate(gen.Job);for(int i=0;i<20&&GenJob.Active(gen.Job)>0;i++)System.Threading.Thread.Sleep(100);
    if(GenJob.Active(gen.Job)!=0){Log("Spatial generation: still not ended");return;}
    genStuck=false;genActive=false;gen.Close();genPhase="已停止";Log("Spatial generation: ended after all");
-   GenChanged();if(panel!=null)RefreshSpatial(true);RunSpatialSweep();return;}
+   GenChanged();if(panel!=null)RefreshSpatial(true);RunSpatialSweep(true);return;}
   genStopped=true;if(genHeld!=null){try{ResumeTree(gen.Id);}catch{}genHeld=null;}
   // the whole job: the generator and everything it started, children it already left behind included
   if(!GenJob.Terminate(gen.Job))Log("Stop generation: its job could not be ended");
@@ -99,7 +105,7 @@ partial class App {
  // suspended, so it costs nothing meanwhile) and goes on by itself afterwards. Called with the power check (500 ms).
  string genHeld,genNotice;bool genCpuNoted;
  void PaceGeneration(bool fullscreen,bool battery){
-  if(!Generating){genHeld=null;return;}
+  if(!genActive){genHeld=null;return;}
   string want=fullscreen?"全屏中":battery?"正在用电池":null;
   if(want==genHeld)return;
   try{if(want!=null&&genHeld==null)SuspendTree(gen.Id);else if(want==null)ResumeTree(gen.Id);}catch(Exception e){Log("Generation pause: "+e.Message);}
@@ -173,7 +179,7 @@ partial class App {
   try{LoadSpatialCatalog();if(spatialEnabled)RebuildSlides();}catch(Exception e){Log("After generation: "+e.Message);}
   if(ended&&drained&&!genStopped&&code==0&&genDone>0)try{tray.ShowBalloonTip(3000,"Matte","Spatial 图片生成完成：新增 "+genDone+" 张",System.Windows.Forms.ToolTipIcon.Info);}catch{}
   GenChanged();if(panel!=null)RefreshSpatial(true);
-  if(ended)RunSpatialSweep();   // the new pictures into the index   // the counts again, now with the new pictures
+  if(ended)RunSpatialSweep(true);   // the new pictures into the index   // the counts again, now with the new pictures
  }
 }
 // What the generator's output says about the photos so far. A photo counts as made only once it is written (Matte's
