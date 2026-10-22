@@ -9,6 +9,7 @@ using System.Runtime.InteropServices;
 // flat still of the photo). If it cannot start, the photo simply shows flat.
 sealed class SpatialDesktopHost : Form {
  readonly NativeSpatial renderer;
+ readonly SpatialLeases leases=new SpatialLeases();
  IntPtr host,icons; bool layered; bool ready;
  [DllImport("user32.dll")] static extern IntPtr SetParent(IntPtr h,IntPtr p);
  [DllImport("user32.dll")] static extern bool SetLayeredWindowAttributes(IntPtr h,uint key,byte alpha,uint flags);
@@ -22,7 +23,7 @@ sealed class SpatialDesktopHost : Form {
  internal bool Ready{get{return ready;}}
  // still: what the desktop shows now (DesktopBlend.Compose, the window's size): shown first, the first scene fades in
  // over it in stillFadeMs; backdrop: the ambient / extended background behind the scene, or null for the colour.
- internal SpatialDesktopHost(string spatialPath,Rectangle bounds,Color color,Bitmap still,Bitmap backdrop,int stillFadeMs=700){
+ internal SpatialDesktopHost(SpatialVerification verified,Rectangle bounds,Color color,Bitmap still,Bitmap backdrop,int stillFadeMs=700){
   host=DesktopBlend.DesktopHost(out icons,out layered);if(host==IntPtr.Zero)throw new InvalidOperationException("Desktop host unavailable");
   FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;AutoScaleMode=AutoScaleMode.None;ClientSize=bounds.Size;BackColor=Color.Black;
   SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.Opaque,true);   // the swap chain is the only content
@@ -35,9 +36,10 @@ sealed class SpatialDesktopHost : Form {
    // shown only once the still is on the swap chain, so the window never appears empty over the wallpaper
    if(!renderer.Start(1500))App.Log("Spatial native: first frame late");
   }catch{if(renderer!=null)renderer.Dispose();DestroyHandle();throw;}
-  Show();SetWindowPos(h,icons,0,0,0,0,0x10|0x01|0x02);ready=true;Navigate(spatialPath,color,backdrop);
+  try{Show();SetWindowPos(h,icons,0,0,0,0,0x10|0x01|0x02);ready=true;Navigate(verified,color,backdrop);}catch{Dispose();throw;}
  }
- internal void Navigate(string spatialPath,Color color,Bitmap backdrop){if(!string.IsNullOrEmpty(spatialPath)){renderer.SetBackdrop(backdrop);renderer.Show(spatialPath,color);}}
+ internal void Navigate(SpatialVerification verified,Color color,Bitmap backdrop){var lease=verified.TakeSceneLease();if(lease==null||verified.Pair==null){if(lease!=null)lease.Dispose();throw new InvalidOperationException("Spatial requires a verified lease");}
+  try{renderer.SetBackdrop(backdrop);int sequence=renderer.Show(verified.Pair.Artifact,color);leases.Add(sequence,lease);}catch{lease.Dispose();throw;}}
  internal void SetColor(Color color){renderer.SetColor(color);}
  // How the camera moves (App.MotionCode): 0 follow the cursor, 1 the opposite way, 2 circle, 3 handheld.
  internal void SetMotion(int mode){renderer.SetMotion(mode);}
@@ -52,9 +54,9 @@ sealed class SpatialDesktopHost : Form {
  void OnNativeEvent(int kind,int sequence){
   if(IsDisposed||!IsHandleCreated)return;
   try{BeginInvoke((Action)delegate{
-   if(IsDisposed)return;
+   if(IsDisposed)return;leases.NativeEvent(kind,sequence);
    if(kind==NativeSpatial.FadeOutDone)FadeFinished();
-   else if(kind==NativeSpatial.LoadError)App.Log("Spatial native: a .spatial file could not be loaded");});}catch{}
+   else if(kind==NativeSpatial.LoadError){App.Log("Spatial native: a .spatial file could not be loaded");}});}catch{}
  }
  internal NativeSpatial.Stats NativeStats{get{return renderer.GetStats();}}
  // The desktop cannot be seen (SpatialPower.cs): the pointer stops driving redraws (slide changes and fades still draw).
@@ -63,18 +65,20 @@ sealed class SpatialDesktopHost : Form {
  protected override void OnPaintBackground(PaintEventArgs e){}
  protected override void OnPaint(PaintEventArgs e){}
  // the renderer stops before the window goes (hidden first by DestroyWindow, so nothing lingers on screen)
- protected override void OnHandleDestroyed(EventArgs e){if(renderer!=null)renderer.Dispose();base.OnHandleDestroyed(e);}
- protected override void Dispose(bool disposing){if(disposing){if(fadeTimer!=null){fadeTimer.Stop();fadeTimer.Dispose();fadeTimer=null;}if(renderer!=null)renderer.Dispose();}base.Dispose(disposing);}
+ protected override void OnHandleDestroyed(EventArgs e){try{if(renderer!=null)renderer.Dispose();}finally{leases.Dispose();}base.OnHandleDestroyed(e);}
+ protected override void Dispose(bool disposing){if(disposing){if(fadeTimer!=null){fadeTimer.Stop();fadeTimer.Dispose();fadeTimer=null;}try{if(renderer!=null)renderer.Dispose();}finally{leases.Dispose();}}base.Dispose(disposing);}
 }
 partial class App {
  SpatialDesktopHost spatialDesktop;
  // The same photo is also the Windows wallpaper underneath Spatial: what the panel's blur sees, and what is left when
  // Spatial closes. While Spatial is showing, it is set a few seconds after a slide change, not during it: Explorer runs
  // its own wallpaper animation behind the 3D layer, and on the same frames it halves the cross-fade's frame rate.
+ IDisposable wallpaperDisplay;
+ void PinWallpaper(string path){var lease=DisplayCache.Pin(path);if(wallpaperDisplay!=null)wallpaperDisplay.Dispose();wallpaperDisplay=lease;}
  string underPath;uint underColor;System.Windows.Forms.Timer underTimer;
  void SetUnderneath(string path,uint color){
   if(underTimer!=null){underTimer.Stop();underTimer.Dispose();underTimer=null;}underPath=null;
-  wall.SetBackgroundColor(color);if(!string.Equals(wall.GetWallpaper(wall.GetMonitorDevicePathAt(0)),path,StringComparison.OrdinalIgnoreCase))wall.SetWallpaper(null,path);
+  wall.SetBackgroundColor(color);if(!string.Equals(wall.GetWallpaper(wall.GetMonitorDevicePathAt(0)),path,StringComparison.OrdinalIgnoreCase))wall.SetWallpaper(null,path);PinWallpaper(path);
  }
  void SetUnderneathLater(string path,uint color){
   underPath=path;underColor=color;
@@ -86,9 +90,9 @@ partial class App {
  void CancelUnderneath(){if(underTimer!=null)underTimer.Stop();underPath=null;}
  // path: what the desktop shows flat (the photo, or its composite); backdropFile: the background drawn behind the 3D
  // scene (AmbientWallpaper.cs / ExtendWallpaper.cs), or null for the colour.
- void StartSpatial(string path,string spatialPath,uint color,string backdropFile){Bitmap backdrop=null;try{CancelBlend();
+ bool StartSpatial(string path,SpatialVerification verified,uint color,string backdropFile){Bitmap backdrop=null;try{CancelBlend();
   if(backdropFile!=null)try{backdrop=DesktopBlend.Compose(backdropFile,Unpack(color),SystemInformation.VirtualScreen,Screen.AllScreens);}catch(Exception e){Log("Spatial backdrop: "+e.Message);}
-  if(spatialDesktop!=null){SetUnderneathLater(path,color);spatialDesktop.Navigate(spatialPath,Unpack(color),backdrop);}
+  if(spatialDesktop!=null){SetUnderneathLater(path,color);spatialDesktop.Navigate(verified,Unpack(color),backdrop);}
   else{
    // the layer starts as what the desktop shows now and fades into the first scene: from the same photo (Spatial
    // switched on) quickly, from the photo before (a flat photo, then this 3D one) as a slide's cross-fade. The new
@@ -96,17 +100,17 @@ partial class App {
    string before=wall.GetWallpaper(wall.GetMonitorDevicePathAt(0));uint beforeColor=wall.GetBackgroundColor();
    int inMs=string.Equals(before,path,StringComparison.OrdinalIgnoreCase)?700:1600;
    using(var still=DesktopBlend.Compose(before,Unpack(beforeColor),SystemInformation.VirtualScreen,Screen.AllScreens)){
-    spatialDesktop=new SpatialDesktopHost(spatialPath,SystemInformation.VirtualScreen,Unpack(color),still,backdrop,inMs);}
+    spatialDesktop=new SpatialDesktopHost(verified,SystemInformation.VirtualScreen,Unpack(color),still,backdrop,inMs);}
    spatialDesktop.SetMotion(MotionCode);if(spatialPaused)spatialDesktop.SetPaused(true);
    SetUnderneath(path,color);
   }
-  blendPath=path;last=Key(path);}
-  catch(Exception e){Log("Spatial wallpaper failed: "+e.Message);CloseSpatial();wall.SetBackgroundColor(color);wall.SetWallpaper(null,path);last=Key(path);}
+  blendPath=path;last=Key(path);return true;}
+  catch(Exception e){Log("Spatial wallpaper failed: "+e.Message);CloseSpatial();wall.SetBackgroundColor(color);wall.SetWallpaper(null,path);last=Key(path);return false;}
   finally{if(backdrop!=null)backdrop.Dispose();}}   // the renderer keeps its own copy
  // Layers still fading out after an animated close. A close without animation (e.g. quitting) takes these too,
  // so no scene outlives it.
  readonly List<SpatialDesktopHost> closingSpatial=new List<SpatialDesktopHost>();
- void CloseSpatial(){CloseSpatial(false);}
+ void CloseSpatial(){CancelSlideRequests();CloseSpatial(false);}
  // animate: the renderer fades to the photo that is the Windows wallpaper underneath, then the layer goes.
  void CloseSpatial(bool animate){CancelUnderneath();
   if(!animate)foreach(var c in closingSpatial.ToArray()){closingSpatial.Remove(c);try{c.Close();c.Dispose();}catch(Exception e){Log("Spatial close: "+e.Message);}}

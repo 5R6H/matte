@@ -40,7 +40,7 @@ partial class App {
   ui=new MessageWindow();CreatePanel();panel.ShowActivated=false;panel.ShowInTaskbar=false;panel.Left=-20000;panel.Top=-20000;panel.Show();
   page="spatialstore";RefreshStore();
  }
- internal void TestClose(){System.Threading.Interlocked.Increment(ref catalogRequest);if(panel!=null)panel.Close();if(ui!=null)ui.Dispose();}
+ internal void TestClose(){CancelSlideRequests();ReleaseDisplayPins();PinWallpaper(null);System.Threading.Interlocked.Increment(ref catalogRequest);if(panel!=null)panel.Close();if(ui!=null)ui.Dispose();}
  internal void TestCatalog(SpatialCatalog catalog,params string[] photos){ApplySpatialCatalog(catalog,photos.Select(p=>Tuple.Create(p,new List<string>{p})).ToList(),true);}
  internal string TestSpatialPath(string path){return SpatialPathFor(path);}
  internal int TestSpatialSlides{get{return spatialSlides.Count;}}
@@ -49,6 +49,15 @@ partial class App {
  internal void TestLoadCatalog(){LoadSpatialCatalog();}
  internal bool TestCatalogLoading{get{return catalogLoading;}}
  internal SpatialCatalog TestCatalogResult{get{return spatialCatalog;}}
+ internal void TestShow(string path){ShowSlide(path);}
+ internal void TestSpatialOn(bool on){spatialEnabled=on;ReevaluateCurrentSpatial();}
+ internal void TestPowerFlat(){spatialFlat=true;ReevaluateCurrentSpatial();}
+ internal void TestPaused(){spatialPaused=true;ReevaluateCurrentSpatial();}
+ internal DateTime TestCountdown{get{return nextSlide;}}
+ internal int TestRotation{get{return slideIndex;}}
+ internal SlideSnapshot TestSnapshot{get{return currentImage;}}
+ internal void TestAhead(string path){slideFiles=new List<string>{path};slideIndex=0;PrepareNextSlide();}
+ internal string TestAmbient(SlideSnapshot image){string backdrop;return WallpaperImage(image,"ambient",new Size(160,100),out backdrop);}
  internal static uint TestAnalyze(string p){return Analyze(p);}
  internal void TestLoadColourCache(){LoadColourCache();}
  internal uint TestColorFor(string p){return ColorFor(p);}
@@ -93,10 +102,12 @@ static class MatteTests {
   if(args.Contains("--locks")){LockTests();return failures;}
   if(args.Contains("--store")){StoreTests();return failures;}
   if(args.Contains("--catalog")){CatalogTests();return failures;}
+  if(args.Contains("--attach")){AttachTests();CacheTests();return failures;}
+  if(args.Contains("--cache")){CacheTests();return failures;}
   IdentityTests();if(args.Contains("--identity"))return failures;
   StoreTests();
   LockTests();
-  CatalogTests();
+  CatalogTests();AttachTests();CacheTests();
   // ② the store page's sweep runs once, not again and again
   Run("2 store page sweeps once",()=>{
    string photos=Fresh("store-photos");for(int i=0;i<3;i++)Solid(Path.Combine(photos,"p"+i+".jpg"),Color.FromArgb(40*i,90,140),64,48,1);
@@ -139,6 +150,7 @@ static class MatteTests {
     var w=new System.Windows.Media.Imaging.FormatConvertedBitmap(App.UprightWpf(bi,p),System.Windows.Media.PixelFormats.Bgra32,null,0);
     Check(w.PixelWidth==g.Width&&w.PixelHeight==g.Height,"orientation "+o+": WPF "+w.PixelWidth+"x"+w.PixelHeight+", GDI+ "+g.Width+"x"+g.Height);
     var px=new byte[w.PixelWidth*w.PixelHeight*4];w.CopyPixels(px,w.PixelWidth*4,0);
+    using(var snap=new SlideSnapshot(p,File.ReadAllBytes(p))){var buffer=new System.Windows.Media.Imaging.FormatConvertedBitmap(snap.Pixels(),System.Windows.Media.PixelFormats.Bgra32,null,0);var pixels=new byte[buffer.PixelWidth*buffer.PixelHeight*4];buffer.CopyPixels(pixels,buffer.PixelWidth*4,0);Check(buffer.PixelWidth==w.PixelWidth&&buffer.PixelHeight==w.PixelHeight&&pixels.SequenceEqual(px),"orientation "+o+": snapshot and path transforms differ");}
     // the pattern's four quarter centres
     foreach(var f in new[]{new[]{.25,.25},new[]{.75,.25},new[]{.25,.75},new[]{.75,.75}}){
      int x=(int)(g.Width*f[0]),y=(int)(g.Height*f[1]);var c=g.GetPixel(x,y);int i=(y*w.PixelWidth+x)*4;
@@ -699,6 +711,119 @@ exit 0
   Directory.CreateDirectory(Path.GetDirectoryName(path));File.WriteAllBytes(path,artifact);
   var sidecar=new Dictionary<string,object>{{"version",1},{"source",new Dictionary<string,object>{{"sha256",source},{"size",data.Length},{"name",Path.GetFileName(photo)}}},{"recipe",new Dictionary<string,object>{{"sha256",recipe},{"fields",fields}}},{"artifact",new Dictionary<string,object>{{"file",Path.GetFileName(path)},{"sha256",CatalogHash(artifact)},{"size",artifact.Length}}},{"created","2026-10-23T01:00:00Z"}};
   File.WriteAllText(path+".json",SpatialIdentity.SidecarJson(sidecar));return path;
+ }
+ // A native sink stand-in: receives only verified leases; releases old scenes on transition completion.
+ sealed class SlideSink:IDisposable {
+  internal readonly List<string> Events=new List<string>();internal readonly SpatialLeases Leases=new SpatialLeases();internal int Sequence;internal SlideSnapshot Image;
+  internal void Show(SlideSnapshot image,SpatialVerification verified){Image=image;Events.Add((verified==null?"flat:":"3d:")+image.Source);if(verified==null)Leases.Dispose();else{Leases.Add(++Sequence,verified.TakeSceneLease());Leases.TransitionDone(Sequence);}}
+  public void Dispose(){Leases.Dispose();}
+ }
+ static void Until(Func<bool> done,string why,int ms=6000){var watch=System.Diagnostics.Stopwatch.StartNew();while(!done()&&watch.ElapsedMilliseconds<ms)Pump(20);Check(done(),why);}
+ static App AttachApp(string store,SlideSink sink,params string[] photos){var app=new App(new TestWall()){TestSettings=new MatteSettings{Playlist=photos.ToList(),SpatialFolder=store}};app.presentSlide=sink.Show;app.TestCatalog(SpatialCatalog.Load(store,photos,SpatialIdentity.RecipeSha256(CatalogRecipe())).Complete(()=>false),photos);app.TestSpatialOn(true);return app;}
+ static void Bmp(string path,Color color){using(var b=new Bitmap(32,24)){using(var g=Graphics.FromImage(b))g.Clear(color);b.Save(path,ImageFormat.Bmp);}}
+ static bool Writable(string path){try{using(var s=new FileStream(path,FileMode.Open,FileAccess.Write,FileShare.ReadWrite|FileShare.Delete)){}return true;}catch(IOException){return false;}}
+ [System.Runtime.InteropServices.DllImport("kernel32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode,SetLastError=true)]static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string path,uint access,uint share,IntPtr security,uint creation,uint flags,IntPtr template);
+ static void CacheTests(){
+  Run("R13 flat JPEG slides make no display copies",()=>{
+   string root=Fresh("r13-flat"),store=Path.Combine(root,"store");var photos=new List<string>();for(int i=0;i<8;i++){string p=Path.Combine(root,i+".jpg");Solid(p,Color.FromArgb(143+i,32+i,92),64,48,1);photos.Add(p);}
+   var before=new HashSet<string>(Directory.Exists(App.DisplayCacheDir)?Directory.GetFiles(App.DisplayCacheDir):new string[0],StringComparer.OrdinalIgnoreCase);
+   using(var sink=new SlideSink()){var app=AttachApp(store,sink,photos.ToArray());try{foreach(string photo in photos){int count=sink.Events.Count;app.TestShow(photo);Until(()=>sink.Events.Count>count,"flat slide not shown");Check(sink.Image.Display==photo,"flat JPEG created a display copy");}
+     Check(!Directory.Exists(App.DisplayCacheDir)||Directory.GetFiles(App.DisplayCacheDir).All(before.Contains),"flat JPEG library copied into cache");
+    }finally{app.TestClose();}}
+  });
+  Run("R13 verified underlay and prepared next stay pinned",()=>{
+   string root=Fresh("r13-pins"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.bmp"),next=Path.Combine(root,"b.bmp");Bmp(photo,Color.Orange);Bmp(next,Color.Purple);CatalogPair(store,photo);string nextArtifact=CatalogPair(store,next);
+   using(var entered=new System.Threading.ManualResetEventSlim())using(var release=new System.Threading.ManualResetEventSlim())using(var sink=new SlideSink()){
+    var app=AttachApp(store,sink,photo,next);SlideSnapshot ahead=null;app.beforeVerifyDelivery=v=>{if(v.Image.Source==next){ahead=v.Image;entered.Set();release.Wait(10000);}};
+    try{app.TestShow(photo);Until(()=>sink.Events.Contains("3d:"+photo),"verified slide not shown");string current=sink.Image.Display;Check(current!=photo&&File.ReadAllBytes(current).SequenceEqual(File.ReadAllBytes(photo)),"verified 3D underlay was not copied from its buffer");Check(sink.Image.ShowPath(false,true)==photo,"flat slide reused a non-WebP display copy");
+     app.TestAhead(next);Until(()=>entered.IsSet,"next slide not prepared");Check(ahead.Display!=next,"next verified underlay not copied");DisplayCache.Trim(App.DisplayCacheDir,0);
+     Check(File.Exists(current)&&File.Exists(ahead.Display),"evicted current or prepared-next display copy");
+     app.TestClose();DisplayCache.Trim(App.DisplayCacheDir,0);Check(File.Exists(current),"evicted the native player's underlay");release.Set();Until(()=>Writable(nextArtifact),"cancelled prefetch kept artifact");
+     sink.Dispose();Until(()=>{DisplayCache.Trim(App.DisplayCacheDir,0);return !File.Exists(current)&&!File.Exists(ahead.Display);},"released display copies remained pinned");
+    }finally{release.Set();app.TestClose();}}
+  });
+  Run("R13 ambient 3D needs no extra source copy",()=>{
+   string root=Fresh("r13-ambient"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.bmp");Bmp(photo,Color.Silver);CatalogPair(store,photo);
+   using(var sink=new SlideSink()){var app=AttachApp(store,sink,photo);app.TestSettings.Background="ambient";try{app.TestShow(photo);Until(()=>sink.Events.Contains("3d:"+photo),"ambient slide not shown");Check(sink.Image.Display==photo&&sink.Image.Wallpaper!=photo&&File.Exists(sink.Image.Wallpaper),"ambient 3D made a redundant source copy");}finally{app.TestClose();}}
+  });
+  Run("R13 cache cap uses last use and skips pinned files",()=>{
+   Check(DisplayCache.Pin("")==null,"empty Windows wallpaper path not accepted");Check(DisplayCache.DefaultLimit==1024L*1024*1024,"default display cap is not 1 GB");string root=Fresh("r13-lru");Action<string> write=p=>File.WriteAllBytes(p,new byte[10]);
+   foreach(string name in new[]{"a.jpg","b.jpg","c.jpg"})using(DisplayCache.Acquire(root,name,write,30)){}
+   DateTime epoch=new DateTime(2000,1,1,0,0,0,DateTimeKind.Utc);File.SetLastWriteTimeUtc(Path.Combine(root,"c.jpg"),epoch);File.SetLastWriteTimeUtc(Path.Combine(root,"a.jpg"),epoch.AddSeconds(1));File.SetLastWriteTimeUtc(Path.Combine(root,"b.jpg"),epoch.AddSeconds(2));
+   using(DisplayCache.Pin(Path.Combine(root,"c.jpg"))){} // c was created first/oldest, but used most recently.
+   using(DisplayCache.Acquire(root,"d.jpg",write,30)){}Check(!File.Exists(Path.Combine(root,"a.jpg"))&&File.Exists(Path.Combine(root,"b.jpg"))&&File.Exists(Path.Combine(root,"c.jpg")),"cache did not evict least recently used copy");Check(new DirectoryInfo(root).GetFiles().Sum(f=>f.Length)<=30,"cache exceeded cap with evictable files");
+   using(var current=DisplayCache.Pin(Path.Combine(root,"c.jpg")))using(var next=DisplayCache.Pin(Path.Combine(root,"d.jpg"))){File.SetLastWriteTimeUtc(current.Path,epoch);File.SetLastWriteTimeUtc(next.Path,epoch);
+    using(DisplayCache.Acquire(root,"e.jpg",write,20)){Check(File.Exists(current.Path)&&File.Exists(next.Path),"evicted an in-use display copy");Check(!File.Exists(Path.Combine(root,"b.jpg")),"kept an unused copy over the cap");}
+   }DisplayCache.Trim(root,0);Check(Directory.GetFiles(root).Length==0,"released cache files were not evictable");
+  });
+ }
+ static void AttachTests(){
+  Run("T2c2 stale source stays flat and heals hint",()=>{
+   string root=Fresh("a-stale"),photo=Path.Combine(root,"photo.bmp"),store=Path.Combine(root,"store");Bmp(photo,Color.Red);string artifact=CatalogPair(store,photo);
+   using(var sink=new SlideSink()){var app=AttachApp(store,sink,photo);var old=app.TestCatalogResult;var stamp=SpatialCatalog.Probe(photo);Bmp(photo,Color.Blue);File.SetLastWriteTimeUtc(photo,new DateTime(stamp.mtimeTicks,DateTimeKind.Utc));var now=SpatialCatalog.Probe(photo);
+    try{Check(now.fileId==stamp.fileId&&now.size==stamp.size&&now.mtimeTicks==stamp.mtimeTicks,"stale fixture changed identity");app.TestShow(photo);Until(()=>sink.Events.Count>0,"no source result");
+     Check(sink.Events.All(e=>e.StartsWith("flat:")),"mismatched source attached 3D");Check(old.Photos[photo].Status==SpatialCatalog.State.Unchecked&&old.Photos[photo].Needs,"mismatched source hint was not dropped");Check(File.Exists(artifact),"healing deleted artifact");
+     Check(File.ReadAllBytes(sink.Image.Display).SequenceEqual(File.ReadAllBytes(photo)),"flat display differs from captured bytes");
+    }finally{app.TestClose();}}
+  });
+  Run("T2c2 unpaired stale hint also invalidated",()=>{
+   var image=new SlideSnapshot("photo.bmp",new byte[]{1,2,3});using(var result=SpatialVerification.Check(1,image,null,new string('0',64)))Check(result.SourceMismatch&&result.Pair==null,"unpaired stale hint was kept");
+  });
+  Run("T2c2 held artifact blocks writes and deletes through transition",()=>{
+   string root=Fresh("a-lease"),photo=Path.Combine(root,"a.bmp"),other=Path.Combine(root,"b.bmp"),store=Path.Combine(root,"store");Bmp(photo,Color.Red);Bmp(other,Color.Blue);string artifact=CatalogPair(store,photo),second=CatalogPair(store,other);
+   var c=SpatialCatalog.Load(store,new[]{photo,other},null).Complete(()=>false);using(var leases=new SpatialLeases()){
+    using(var first=SpatialVerification.Check(1,new SlideSnapshot(photo,File.ReadAllBytes(photo)),c.Photos[photo].Pair)){Check(first.Pair!=null,"valid pair rejected");leases.Add(1,first.TakeHandle());}
+    Check(!Writable(artifact),"shown artifact allowed a writer");bool deleted=false;try{File.Delete(artifact);deleted=true;}catch(IOException){}Check(!deleted,"shown artifact allowed deletion");
+    using(var native=CreateFileW(artifact,0x80000000,1|4,IntPtr.Zero,3,0,IntPtr.Zero))Check(!native.IsInvalid,"native read open incompatible with held lease");
+    using(var next=SpatialVerification.Check(2,new SlideSnapshot(other,File.ReadAllBytes(other)),c.Photos[other].Pair))leases.Add(2,next.TakeHandle());leases.NativeEvent(NativeSpatial.FirstScene,2);Check(!Writable(artifact),"old scene lease released during transition");
+    leases.NativeEvent(NativeSpatial.TransitionDone,2);Check(Writable(artifact),"old scene lease survived transition");File.Delete(artifact);Check(!Writable(second),"current scene lease released too soon");
+   }Check(Writable(second),"shutdown kept current lease");File.Delete(second);
+  });
+  foreach(string change in new[]{"slide","off","power","fullscreen"})Run("T2c2 late result rejected after "+change,()=>{
+   string root=Fresh("a-late-"+change),photo=Path.Combine(root,"a.bmp"),other=Path.Combine(root,"b.bmp"),store=Path.Combine(root,"store");Bmp(photo,Color.Red);Bmp(other,Color.Blue);string artifact=CatalogPair(store,photo);
+   using(var entered=new System.Threading.ManualResetEventSlim())using(var release=new System.Threading.ManualResetEventSlim())using(var sink=new SlideSink()){
+    var app=AttachApp(store,sink,photo,other);app.beforeVerifyDelivery=v=>{if(v.Image.Source==photo&&v.Pair!=null){entered.Set();release.Wait(10000);}};
+    try{app.TestShow(photo);Until(()=>entered.IsSet,"verification did not enter gate");Check(!Writable(artifact),"verification did not hold artifact");
+     if(change=="slide")app.TestShow(other);else if(change=="off")app.TestSpatialOn(false);else if(change=="power")app.TestPowerFlat();else app.TestPaused();release.Set();
+     Until(()=>Writable(artifact)||sink.Events.Contains("3d:"+photo),"late result leaked its artifact handle");Check(!sink.Events.Contains("3d:"+photo),"late result attached obsolete 3D");Until(()=>sink.Events.Count>0,"replacement did not display");Pump(100);
+     Check(!sink.Events.Contains("3d:"+photo),"late result attached obsolete 3D");if(change=="slide")Check(sink.Image.Source==other,"late result replaced current photo");
+    }finally{release.Set();app.TestClose();}}
+  });
+  Run("T2c2 two second flat fallback then current 3D",()=>{
+   string root=Fresh("a-timeout"),photo=Path.Combine(root,"a.bmp"),store=Path.Combine(root,"store");Bmp(photo,Color.Red);CatalogPair(store,photo);
+   using(var entered=new System.Threading.ManualResetEventSlim())using(var release=new System.Threading.ManualResetEventSlim())using(var sink=new SlideSink()){
+    var app=AttachApp(store,sink,photo);app.beforeVerifyDelivery=v=>{entered.Set();release.Wait(10000);};try{app.TestShow(photo);Until(()=>entered.IsSet,"timeout gate not entered");Until(()=>sink.Events.Count>0,"no flat fallback",2800);Check(sink.Events[0]=="flat:"+photo,"did not show flat while verification pending");var countdown=app.TestCountdown;release.Set();Until(()=>sink.Events.Contains("3d:"+photo),"current verified result did not attach");Check(app.TestCountdown==countdown,"late attach reset timer");}finally{release.Set();app.TestClose();}}
+  });
+  Run("T2c2 WebP and ambient use buffer digest despite preserved mtime",()=>{
+   // Independent real lossless WebP fixtures, made by Pillow: 16x12 solid red and blue, equal length.
+   byte[] red=Convert.FromBase64String("UklGRhwAAABXRUJQVlA4TA8AAAAvD8ACAAcQ/Y/+ByKi/wEA"),blue=Convert.FromBase64String("UklGRhwAAABXRUJQVlA4TA8AAAAvD8ACAAcQ0f/+ByKi/wEA");
+   Func<byte[],System.Windows.Media.Imaging.BitmapSource> decoder=null;
+   try{new SlideSnapshot("probe.webp",red).Pixels();}catch(NotSupportedException){
+    Console.WriteLine("INFO  WebP WPF codec unavailable; cache test uses a buffer decoder stand-in (real WebP fixture bytes)");
+    decoder=bytes=>{Check(bytes.SequenceEqual(red)||bytes.SequenceEqual(blue),"decoder received different bytes");byte[] pixels=new byte[16*12*3];for(int i=0;i<pixels.Length;i+=3)pixels[i+(bytes.SequenceEqual(red)?2:0)]=255;var image=System.Windows.Media.Imaging.BitmapSource.Create(16,12,96,96,System.Windows.Media.PixelFormats.Bgr24,null,pixels,48);image.Freeze();return image;};
+   }
+   string root=Fresh("a-webp"),photo=Path.Combine(root,"photo.webp"),cache=Path.Combine(root,"cache");File.WriteAllBytes(photo,red);var time=File.GetLastWriteTimeUtc(photo);var first=new SlideSnapshot(photo,File.ReadAllBytes(photo),decoder);first.MakeDisplay(cache);
+   var app=new App(new TestWall()){TestSettings=new MatteSettings()};try{string bg=app.TestAmbient(first);File.WriteAllBytes(photo,blue);File.SetLastWriteTimeUtc(photo,time);var next=new SlideSnapshot(photo,File.ReadAllBytes(photo),decoder);next.MakeDisplay(cache);string nextBg=app.TestAmbient(next);
+    Check(first.Display!=next.Display&&!File.ReadAllBytes(first.Display).SequenceEqual(File.ReadAllBytes(next.Display)),"preserved-mtime WebP reused old display copy");Check(bg!=nextBg&&!File.ReadAllBytes(bg).SequenceEqual(File.ReadAllBytes(nextBg)),"preserved-mtime ambient reused old composite");
+    File.WriteAllBytes(photo,red);using(var decoded=next.Decode())Check(decoded.GetPixel(0,0).B>200,"decoded source path instead of captured buffer");Check(File.ReadAllBytes(next.Display).Length>0,"display missing");first.Dispose();next.Dispose();
+   }finally{app.TestClose();}
+  });
+  Run("T2c2 reload preserves 3D and attaches new pair without rotation",()=>{
+   string root=Fresh("a-reload"),photo=Path.Combine(root,"a.bmp"),other=Path.Combine(root,"b.bmp"),store=Path.Combine(root,"store");Bmp(photo,Color.Red);Bmp(other,Color.Blue);string artifact=CatalogPair(store,photo);
+   using(var sink=new SlideSink()){var app=AttachApp(store,sink,photo,other);try{app.TestShow(photo);Until(()=>sink.Events.Contains("3d:"+photo),"initial 3D missing");var countdown=app.TestCountdown;int rotation=app.TestRotation,count=sink.Events.Count;
+     File.Delete(Path.Combine(store,"v1","index.json"));app.TestLoadCatalog();Check(app.TestSpatialPath(photo)==artifact&&app.TestSpatialSlides==1,"catalogue cleared before reload applied");Until(()=>!app.TestCatalogLoading,"reload unfinished");Check(sink.Events.Count==count&&app.TestCountdown==countdown&&app.TestRotation==rotation,"reload flickered or restarted rotation");
+     app.TestShow(other);Until(()=>sink.Events.Last()=="flat:"+other,"unpaired photo not flat");countdown=app.TestCountdown;CatalogPair(store,other);app.TestLoadCatalog();Until(()=>sink.Events.Last()=="3d:"+other,"new pair did not attach on reload");Check(app.TestCountdown==countdown&&app.TestRotation==rotation,"new pair restarted rotation");
+     File.Delete(SpatialIdentity.SidecarPath(store,app.TestSnapshot.Digest,SpatialIdentity.RecipeSha256(CatalogRecipe())));app.TestLoadCatalog();Until(()=>sink.Events.Last()=="flat:"+other,"lost pair did not drop 3D");
+    }finally{app.TestClose();}}
+  });
+  foreach(bool sidecar in new[]{false,true})Run("T2c2 rejects and suppresses changed "+(sidecar?"sidecar":"artifact"),()=>{
+   string root=Fresh("a-bad-"+sidecar),photo=Path.Combine(root,"a.bmp"),store=Path.Combine(root,"store");Bmp(photo,Color.Red);string artifact=CatalogPair(store,photo);
+   using(var sink=new SlideSink()){var app=AttachApp(store,sink,photo);try{if(sidecar)File.WriteAllText(artifact+".json","{\"version\":2}");else{byte[] b=File.ReadAllBytes(artifact);b[0]^=1;File.WriteAllBytes(artifact,b);}app.TestShow(photo);Until(()=>sink.Events.Count>0,"bad pair result missing");Check(sink.Events.All(e=>e.StartsWith("flat:")),"changed pair attached");Until(()=>!app.TestCatalogLoading,"bad pair reload unfinished");Check(app.TestSpatialPath(photo)==null&&File.Exists(artifact),"bad pair still offered or deleted");CatalogPair(store,photo);app.TestLoadCatalog();Until(()=>sink.Events.Last()=="3d:"+photo,"regenerated pair remains suppressed");}finally{app.TestClose();}}
+  });
+  Run("T2c2 off skips 3D verification and next slide is prepared",()=>{
+   string root=Fresh("a-ahead"),photo=Path.Combine(root,"a.bmp"),store=Path.Combine(root,"store");Bmp(photo,Color.Red);string artifact=CatalogPair(store,photo);
+   using(var entered=new System.Threading.ManualResetEventSlim())using(var sink=new SlideSink()){var app=AttachApp(store,sink,photo);SpatialVerification prepared=null;app.beforeVerifyDelivery=v=>{prepared=v;entered.Set();};try{app.TestSpatialOn(false);app.TestAhead(photo);Until(()=>entered.IsSet,"next slide not prepared");Check(prepared.Candidate==null&&prepared.Pair==null&&!prepared.HasHandle&&Writable(artifact),"Spatial off started 3D verification");app.TestShow(photo);Until(()=>sink.Events.Count>0,"prepared next slide not shown");Check(sink.Events[0]=="flat:"+photo,"off attached 3D");}finally{app.TestClose();}}
+  });
  }
  static void CatalogTests(){
   Run("T2c1 same stems and legacy flat",()=>{

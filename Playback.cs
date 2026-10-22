@@ -22,6 +22,7 @@ partial class App {
  static readonly uint EmptyColor=Pack(Swatch.Neutral);
  bool showingEmpty;
  void ShowEmpty(){
+  CancelSlideRequests();currentImage=null;
  currentSourcePath=null;slideFiles=new List<string>();slideIndex=0;slideBack.Clear();slideAhead.Clear();   // 上一张 must not bring back a removed photo
   if(!showingEmpty){
    showingEmpty=true;Log("Playlist empty: neutral wallpaper");
@@ -29,7 +30,7 @@ partial class App {
     string png=Path.Combine(Dir,"matte-empty.png");
     if(!File.Exists(png))using(var b=new System.Drawing.Bitmap(64,64)){using(var g=System.Drawing.Graphics.FromImage(b))g.Clear(Swatch.Neutral);b.Save(png,System.Drawing.Imaging.ImageFormat.Png);}
     CancelBlend();fade.Stop();CancelUnderneath();
-    wall.SetBackgroundColor(EmptyColor);wall.SetWallpaper(null,png);last=Key(png);   // first, so a closing Spatial layer fades to it
+    wall.SetBackgroundColor(EmptyColor);wall.SetWallpaper(null,png);ReleaseDisplayPins();PinWallpaper(png);last=Key(png);   // first, so a closing Spatial layer fades to it
     CloseSpatial(true);
    }catch(Exception e){Log("Empty wallpaper: "+e.Message);}
   }

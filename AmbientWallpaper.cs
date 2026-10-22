@@ -15,7 +15,7 @@ using System.Windows.Forms;
 // alone (behind a Spatial scene, SpatialNative's backdrop).
 // The choice is global (settings.Background, the menu's 壁纸背景): every photo the same way, no exceptions per photo.
 partial class App {
- const string AmbientVersion="a2";   // a new look: the cached ambiences are made again
+ const string AmbientVersion="a3";   // a new look: the cached ambiences are made again
  // color | extend (ExtendWallpaper.cs) | ambient
  string BackgroundMode{get{return settings.Background=="ambient"||settings.Background=="extend"?settings.Background:"color";}}
  bool AmbientDefault{get{return settings.Background=="ambient";}}
@@ -34,28 +34,23 @@ partial class App {
 
  // What Windows shows for this photo: the composite on ambience, or the photo itself (on the colour).
  // backdrop: the ambience alone, or null.
- string WallpaperImage(string display,out string backdrop){
+ string WallpaperImage(SlideSnapshot image,string mode,Size size,out string backdrop){
   backdrop=null;
-  if(BackgroundMode=="extend"){try{string done=ExtendFile(display,ColorFor(display));backdrop=done;return done;}catch(Exception e){Log("Extend wallpaper: "+e.Message);return display;}}
-  if(!AmbientFor(display))return display;
-  try{string bg;string done=AmbientFiles(display,out bg);backdrop=bg;return done;}
-  catch(Exception e){Log("Ambient wallpaper: "+e.Message);return display;}
+  try{if(mode=="extend"){backdrop=ExtendFile(image,image.Color,size);return backdrop;}if(mode=="ambient")return AmbientFiles(image,size,out backdrop);}
+  catch(Exception e){Log("Wallpaper preparation: "+e.Message);}return image.Display;
  }
  static readonly object ambientLock=new object();
  static Size AmbientScreen{get{return Screen.PrimaryScreen.Bounds.Size;}}
- string AmbientKey(string display){
-  var s=AmbientScreen;string key=display+"|"+File.GetLastWriteTimeUtc(display).Ticks+"|"+s.Width+"x"+s.Height+"|"+AmbientVersion;
-  using(var sha=System.Security.Cryptography.SHA256.Create())return BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(key))).Replace("-","").Substring(0,40);
- }
+ static string AmbientKey(string digest,Size size){return SlideSnapshot.Hash(System.Text.Encoding.UTF8.GetBytes(digest+"|"+size.Width+"x"+size.Height+"|"+AmbientVersion));}
+ string AmbientKey(string display){string name=Path.GetFileName(display);string digest=name.Length>=64&&System.Text.RegularExpressions.Regex.IsMatch(name.Substring(0,64),@"\A[0-9a-f]{64}\z")?name.Substring(0,64):SlideSnapshot.Hash(File.ReadAllBytes(display));return AmbientKey(digest,AmbientScreen);}
  static string AmbientDir{get{return Path.Combine(Dir,"ambient-cache");}}
  // Made if missing (also from a background thread, ahead of the next slide); returns the composite.
- string AmbientFiles(string display,out string backdrop){
-  string key=AmbientKey(display),done=Path.Combine(AmbientDir,key+".jpg");backdrop=Path.Combine(AmbientDir,key+"-bg.jpg");
+ string AmbientFiles(SlideSnapshot image,Size size,out string backdrop){
+  string key=AmbientKey(image.Digest,size),done=Path.Combine(AmbientDir,key+".jpg");backdrop=Path.Combine(AmbientDir,key+"-bg.jpg");
   lock(ambientLock){
    if(File.Exists(done)&&File.Exists(backdrop))return done;
    Directory.CreateDirectory(AmbientDir);
-   var size=AmbientScreen;
-   using(var photo=LoadUpright(display)){
+   using(var photo=image.Decode()){
     using(var bg=AmbienceImage(photo,size)){
      SaveJpeg(bg,backdrop,90);
      using(var g=Graphics.FromImage(bg)){g.InterpolationMode=InterpolationMode.HighQualityBicubic;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.CompositingQuality=CompositingQuality.HighQuality;
@@ -78,7 +73,9 @@ partial class App {
  // The same for WPF, which decodes the stored pixels too (a phone's portrait photo lies on its side): the EXIF orientation
  // turned into a TransformedBitmap, in the order Upright uses (turn, then mirror).
  internal static System.Windows.Media.Imaging.BitmapSource UprightWpf(System.Windows.Media.Imaging.BitmapSource b,string path){
-  int o=Orientation(path);if(b==null||o<=1||o>8)return b;
+  return UprightWpf(b,Orientation(path));}
+ internal static System.Windows.Media.Imaging.BitmapSource UprightWpf(System.Windows.Media.Imaging.BitmapSource b,int o){
+  if(b==null||o<=1||o>8)return b;
   int turn=o==3||o==4?180:o==5||o==6?90:o==7||o==8?270:0;bool mirror=o==2||o==4||o==5||o==7;
   if(o==4){turn=0;}   // 4 = upside-down mirror: Upright turns 180 then mirrors, which is a vertical mirror
   var g=new System.Windows.Media.TransformGroup();
@@ -88,10 +85,13 @@ partial class App {
  }
  internal static int Orientation(string path){
   try{var frame=System.Windows.Media.Imaging.BitmapFrame.Create(new Uri(path),System.Windows.Media.Imaging.BitmapCreateOptions.DelayCreation|System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreColorProfile,System.Windows.Media.Imaging.BitmapCacheOption.None);
-   var md=frame.Metadata as System.Windows.Media.Imaging.BitmapMetadata;if(md==null||!md.ContainsQuery("System.Photo.Orientation"))return 1;
-   var v=md.GetQuery("System.Photo.Orientation");return v==null?1:System.Convert.ToInt32(v);}
+   return Orientation(frame);}
   catch{return 1;}
  }
+ internal static int Orientation(System.Windows.Media.Imaging.BitmapFrame frame){try{
+   var md=frame.Metadata as System.Windows.Media.Imaging.BitmapMetadata;if(md==null||!md.ContainsQuery("System.Photo.Orientation"))return 1;
+   var v=md.GetQuery("System.Photo.Orientation");return v==null?1:System.Convert.ToInt32(v);
+  }catch{return 1;}}
  static Rectangle FitRect(Size picture,Size screen){
   double scale=Math.Min((double)screen.Width/picture.Width,(double)screen.Height/picture.Height);int w=(int)Math.Round(picture.Width*scale),h=(int)Math.Round(picture.Height*scale);
   return new Rectangle((screen.Width-w)/2,(screen.Height-h)/2,w,h);
@@ -138,11 +138,11 @@ partial class App {
  }
  // 延展: the photo with its edges flowing into its colour, screen-sized, made once per photo, screen and colour (a new
  // colour on 编辑壁纸 makes it again). Also the backdrop behind a Spatial scene (the photo part is under the scene).
- string ExtendFile(string display,uint color){
-  var size=AmbientScreen;string key=AmbientKey(display)+"-"+color.ToString("X6");string done=Path.Combine(AmbientDir,key+"-x.jpg");
+ string ExtendFile(SlideSnapshot image,uint color,Size size){
+  string key=AmbientKey(image.Digest,size)+"-"+color.ToString("X6");string done=Path.Combine(AmbientDir,key+"-x.jpg");
   lock(ambientLock){
    if(File.Exists(done))return done;Directory.CreateDirectory(AmbientDir);
-   using(var photo=LoadUpright(display)){using(var b=ExtendWallpaper.Make(photo,size,Unpack(color)))SaveJpeg(b,done,95);}
+   using(var photo=image.Decode()){using(var b=ExtendWallpaper.Make(photo,size,Unpack(color)))SaveJpeg(b,done,95);}
    TrimAmbientCache();
   }
   return done;
@@ -158,12 +158,5 @@ partial class App {
    foreach(var f in files.Skip(600))try{f.Delete();}catch{}}catch{}
  }
  // The next photo's ambience made ahead (the slide change itself then only reads it).
- void PrepareNextAmbient(){
-  if(slideFiles.Count==0)return;
-  string next=slideAhead.Count>0?slideAhead[slideAhead.Count-1]:slideFiles[slideIndex%slideFiles.Count];
-  string mode=BackgroundMode;if(mode=="color")return;
-  uint col=0;string disp=null;
-  if(mode=="extend"){try{if(!File.Exists(next))return;disp=DisplayPath(next);col=ColorFor(disp);}catch(Exception e){Log("Extend ahead: "+e.Message);return;}}   // the colour here (its cache is the UI thread's)
-  Task.Run(()=>{try{if(!File.Exists(next))return;string display=disp??DisplayPath(next);if(mode=="extend")ExtendFile(display,col);else{string bg;AmbientFiles(display,out bg);}}catch(Exception e){Log("Background ahead: "+e.Message);}});
- }
+ void PrepareNextAmbient(){PrepareNextSlide();}
 }

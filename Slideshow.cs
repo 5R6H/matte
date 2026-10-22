@@ -53,6 +53,7 @@ partial class App {
    wall.GetSlideshowOptions(out settings.Options,out settings.Interval);settings.Normalize();   // the photo whole, not Windows' own fillif(settings.Interval<10000)settings.Interval=1800000;settings.Options|=1;
    SaveSettings();
   }
+  DisplayCache.Register(DisplayCacheDir);PinWallpaper(wall.GetWallpaper(wall.GetMonitorDevicePathAt(0)));
   LoadSpatialMode();ui=new MessageWindow();ui.ShellRestarted=OnShellRestarted;
   InitSpatialPower();
   try{UseSlideshow();}catch(Exception e){Log("Slideshow start: "+e.Message);}
@@ -83,8 +84,8 @@ partial class App {
   if(k>=0&&!Sequential){slideFiles.RemoveAt(k);slideFiles.Insert(0,keep);k=0;}   // in order, the rotation carries on from where this photo sits
   if(k>=0&&Playable(keep)){slideIndex=k+1;ShowSlide(keep);if(timer>DateTime.Now)nextSlide=timer;}else AdvanceSlide();
  }
- // WebP is shown through a JPEG copy (Windows' wallpaper service does not take WebP), named by a hash of the path.
- string DisplayPath(string path){if(!path.EndsWith(".webp",StringComparison.OrdinalIgnoreCase))return path;string folder=Path.Combine(Dir,"display-cache");Directory.CreateDirectory(folder);string key=path+File.GetLastWriteTimeUtc(path).Ticks;string hash;using(var sha=System.Security.Cryptography.SHA256.Create())hash=BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(key))).Replace("-","");string output=Path.Combine(folder,hash+".jpg");if(!File.Exists(output)){var decoder=System.Windows.Media.Imaging.BitmapDecoder.Create(new Uri(path),System.Windows.Media.Imaging.BitmapCreateOptions.None,System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);var encoder=new System.Windows.Media.Imaging.JpegBitmapEncoder();encoder.QualityLevel=96;encoder.Frames.Add(decoder.Frames[0]);using(var stream=File.Create(output))encoder.Save(stream);}return output;}
+ // Flat photos use their source; WebP and verified 3D underlays use captured display copies.
+ string DisplayPath(string path){if(currentImage!=null&&currentImage.Source==path&&File.Exists(currentImage.Display))return currentImage.Display;if(!path.EndsWith(".webp",StringComparison.OrdinalIgnoreCase))return path;using(var image=new SlideSnapshot(path,File.ReadAllBytes(path)))return image.MakeDisplay(DisplayCacheDir);}
  [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct SHFILEOPSTRUCT{public IntPtr hwnd;public uint wFunc;public string pFrom;public string pTo;public ushort fFlags;public bool fAnyOperationsAborted;public IntPtr hNameMappings;public string lpszProgressTitle;}
  [DllImport("shell32.dll",CharSet=CharSet.Unicode)] static extern int SHFileOperation(ref SHFILEOPSTRUCT op);
  static void Recycle(string path){if(string.IsNullOrEmpty(path)||!File.Exists(path))return;var op=new SHFILEOPSTRUCT{wFunc=3,pFrom=path+"\0\0",fFlags=0x40|0x10};int rc=SHFileOperation(ref op);if(rc!=0||op.fAnyOperationsAborted)throw new IOException("无法将文件移到回收站: "+Path.GetFileName(path));}
@@ -104,28 +105,11 @@ partial class App {
   Log("Slideshow: nothing playable in the playlist; staying on the current photo");nextSlide=DateTime.Now.AddMilliseconds(settings.Interval);}
  void PreviousSlide(){
   while(slideBack.Count>0){string p=slideBack[slideBack.Count-1];slideBack.RemoveAt(slideBack.Count-1);if(!Playable(p))continue;if(currentSourcePath!=null)slideAhead.Add(currentSourcePath);ShowSlide(p);return;}}
- void ShowSlide(string path){bool newPhoto=!string.Equals(currentSourcePath,path,StringComparison.OrdinalIgnoreCase);currentSourcePath=path;showingEmpty=false;
- string display=DisplayPath(path);if(spatialEnabled&&display!=path)spatialFiles[display]=SpatialPathFor(path);fade.Stop();
- uint color=ColorFor(display);
- shownColor=color;   // before the panel refreshes, so its swatch shows this photo's colour
- PanelWallpaperChanged(display,color,1600,newPhoto);   // the open panel's backdrop and card follow, in step with the 1.6 s cross-fade
- // Energy saver (SpatialPower.cs): a Spatial slide is shown as the flat photo until it ends.
- shownFlat=spatialFlat;
- // on its ambience (AmbientWallpaper.cs) or the photo itself on the colour
- string backdrop,shown=WallpaperImage(display,out backdrop);
- if(SpatialPlays&&!spatialFlat&&SpatialPathFor(path)!=null){StartSpatial(shown,SpatialPathFor(path),color,backdrop);}
- else {
-  // Leaving Spatial: the same photo is already the Windows wallpaper underneath, so the Spatial layer just fades away.
-  FlushUnderneath();   // a slide change's wallpaper may still be waiting (SetUnderneathLater)
-  bool same=spatialDesktop!=null&&string.Equals(wall.GetWallpaper(wall.GetMonitorDevicePathAt(0)),shown,StringComparison.OrdinalIgnoreCase);
-  CloseSpatial(true);
-  if(same){wall.SetBackgroundColor(color);last=Key(shown);}
-  else if(!StartBlend(shown,color)){wall.SetBackgroundColor(color);wall.SetWallpaper(null,shown);last=Key(shown);}}
- shownColor=color;nextSlide=DateTime.Now.AddMilliseconds(settings.Interval);
- PrepareNextAmbient();
- UpdateTray();}   // tray and desktop shortcut take this photo's colour now, not at the next 2 s poll
+ void ShowSlide(string path){BeginSlide(path,false);}
  // Every 2 s (App.Check): a second start of Matte asks for the panel (show.request), and the next photo when it is due.
  void CheckRequests(){
+  PinWallpaper(wall.GetWallpaper(wall.GetMonitorDevicePathAt(0))); // Includes delayed/flat wallpaper changes after a transition.
+  ReevaluateCurrentSpatial();
   string f=Path.Combine(Dir,"show.request");if(File.Exists(f)){try{File.Delete(f);}catch{}TogglePanel(false);}
   if(!holdSlide&&DateTime.Now>=nextSlide){try{AdvanceSlide();}catch(Exception e){Log("Slideshow: "+e.Message);nextSlide=DateTime.Now.AddMilliseconds(settings.Interval);}}
  }

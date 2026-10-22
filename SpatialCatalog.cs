@@ -79,8 +79,16 @@ sealed class SpatialCatalog {
     }}catch(IOException){hashErrors.Add(kv.Key);}catch(UnauthorizedAccessException){hashErrors.Add(kv.Key);}catch(System.Security.SecurityException){hashErrors.Add(kv.Key);}
   }SaveIndex();
  }
+ // The worker never shares mutable hints/photos with the UI catalogue it has just published.
+ internal SpatialCatalog CopyForHash(){var copy=new SpatialCatalog(Store,Desired,probe);copy.hints=new Dictionary<string,Hint>(hints,StringComparer.OrdinalIgnoreCase);
+  foreach(var p in Photos)copy.Photos[p.Key]=new Photo{Status=p.Value.Status,Digest=p.Value.Digest,Pair=p.Value.Pair,Needs=p.Value.Needs};return copy;}
  internal SpatialCatalog Complete(Func<bool> cancelled){HashMissing(cancelled);var next=Read(Store,Photos.Keys,Desired,probe,hints);
   foreach(string path in hashErrors){next.Photos[path].Status=State.Error;next.Photos[path].Pair=null;next.Photos[path].Needs=true;}return next;}
+ internal void DropHint(string path){hints.Remove(path);Photo p;if(Photos.TryGetValue(path,out p)){p.Status=State.Unchecked;p.Digest=null;p.Pair=null;p.Needs=true;}}
+ internal void SuppressPairs(IEnumerable<string> rejected){var bad=new HashSet<string>(rejected,StringComparer.OrdinalIgnoreCase);
+  foreach(var list in Pairs.Values){int removed=list.RemoveAll(p=>bad.Contains(p.Artifact));Valid-=removed;Invalid+=removed;}
+  foreach(var p in Photos.Values)if(p.Digest!=null){List<SpatialIdentity.Pair> pairs;if(Pairs.TryGetValue(p.Digest,out pairs)){p.Pair=SpatialIdentity.Select(p.Digest,Desired,pairs);p.Needs=Desired==null||!pairs.Any(x=>x.RecipeSha==Desired);}}
+ }
  internal void SaveIndex(){string path=Path.Combine(Store,"v1","index.json"),temp=path+".tmp-"+Guid.NewGuid().ToString("N");
   try{Directory.CreateDirectory(Path.GetDirectoryName(path));var j=new JavaScriptSerializer{MaxJsonLength=int.MaxValue};
    File.WriteAllText(temp,j.Serialize(new Index{version=1,photos=hints}),new UTF8Encoding(false));
