@@ -119,6 +119,7 @@ static class MatteTests {
 
  [STAThread] static int Main(string[] args){
   if(args.Length==3&&args[0]=="--hold-lock"){using(SpatialStoreLock.Acquire(args[1],3000)){Console.WriteLine("LOCKED");Console.Out.Flush();System.Threading.Thread.Sleep(int.Parse(args[2]));}return 0;}
+  if(args.Contains("--format")){FormatTests();return failures;}
   if(args.Contains("--locks")){LockTests();return failures;}
   if(args.Contains("--store")){StoreTests();return failures;}
   if(args.Contains("--catalog")){CatalogTests();return failures;}
@@ -129,7 +130,7 @@ static class MatteTests {
   IdentityTests();if(args.Contains("--identity"))return failures;
   StoreTests();
   LockTests();
-  CatalogTests();AttachTests();CacheTests();RetentionTests();StorePageTests();
+  CatalogTests();FormatTests();AttachTests();CacheTests();RetentionTests();StorePageTests();
   // ② the store page's sweep runs once, not again and again
   Run("2 store page sweeps once",()=>{
    string photos=Fresh("store-photos");for(int i=0;i<3;i++)Solid(Path.Combine(photos,"p"+i+".jpg"),Color.FromArgb(40*i,90,140),64,48,1);
@@ -729,7 +730,7 @@ exit 0
  static Dictionary<string,object> CatalogRecipe(int width=2560){return new Dictionary<string,object>{{"exporter","spatial-photos/1"},{"generator","matte-sharp/1"},{"height",1600},{"width",width},{"model",new string('0',64)},{"upright","exif-v1"}};}
  static string CatalogHash(byte[] data){using(var sha=System.Security.Cryptography.SHA256.Create())return BitConverter.ToString(sha.ComputeHash(data)).Replace("-","").ToLowerInvariant();}
  static string CatalogPair(string store,string photo,int width=2560){
-  byte[] data=File.ReadAllBytes(photo),artifact=System.Text.Encoding.UTF8.GetBytes("test spatial");var fields=CatalogRecipe(width);string source=CatalogHash(data),recipe=SpatialIdentity.RecipeSha256(fields),path=SpatialIdentity.ArtifactPath(store,source,recipe);
+  byte[] data=File.ReadAllBytes(photo),artifact=SpatialFixture();var fields=CatalogRecipe(width);string source=CatalogHash(data),recipe=SpatialIdentity.RecipeSha256(fields),path=SpatialIdentity.ArtifactPath(store,source,recipe);
   Directory.CreateDirectory(Path.GetDirectoryName(path));File.WriteAllBytes(path,artifact);
   var sidecar=new Dictionary<string,object>{{"version",1},{"source",new Dictionary<string,object>{{"sha256",source},{"size",data.Length},{"name",Path.GetFileName(photo)}}},{"recipe",new Dictionary<string,object>{{"sha256",recipe},{"fields",fields}}},{"artifact",new Dictionary<string,object>{{"file",Path.GetFileName(path)},{"sha256",CatalogHash(artifact)},{"size",artifact.Length}}},{"created","2026-10-23T01:00:00Z"}};
   File.WriteAllText(path+".json",SpatialIdentity.SidecarJson(sidecar));return path;
@@ -936,6 +937,148 @@ exit 0
    }DisplayCache.Trim(root,0);Check(Directory.GetFiles(root).Length==0,"released cache files were not evictable");
   });
  }
+ // Exporter-layout fixtures only. JPEG pixels are generated here; no owner photos/cache are enumerated.
+ static byte[] formatJpeg;
+ static byte[] SpatialFixture(int slices=1,int gw=1,int gh=1,int block=16){
+  if(formatJpeg==null)using(var bmp=new Bitmap(16,16))using(var stream=new MemoryStream()){using(var g=Graphics.FromImage(bmp))g.Clear(Color.CornflowerBlue);bmp.Save(stream,ImageFormat.Jpeg);formatJpeg=stream.ToArray();}
+  long corners=SpatialFormat.CornerSlots(gw,gh),cells=(long)gw*gh;byte[] cm=new byte[(int)((corners+7)/8)],bm=new byte[(int)((cells+7)/8)];
+  foreach(int n in new[]{0,1,gw+1,gw+2})cm[n/8]|=(byte)(1<<(n%8));bm[0]=1;
+  byte[] geometry;using(var stream=new MemoryStream())using(var w=new BinaryWriter(stream)){for(int s=0;s<slices;s++){w.Write(4u);w.Write(1u);w.Write(cm);for(int n=0;n<4;n++)w.Write(1f+n*.1f);w.Write(bm);w.Write((byte)0);w.Write((byte)0);}geometry=stream.ToArray();}
+  using(var stream=new MemoryStream())using(var w=new BinaryWriter(stream)){
+   w.Write(4280403u);w.Write((uint)(gw*block));w.Write((uint)(gh*block));w.Write((uint)slices);w.Write((uint)block);w.Write(32f);w.Write(16u);w.Write(16u);w.Write(0u);w.Write(1f);
+   w.Write((uint)(4*slices));w.Write((uint)slices);w.Write((uint)geometry.Length);w.Write((uint)formatJpeg.Length);w.Write((uint)formatJpeg.Length);w.Write(16u);w.Write(16u);w.Write(geometry);w.Write(formatJpeg);w.Write(formatJpeg);return stream.ToArray();
+  }
+ }
+ static void FormatUInt(byte[] b,int at,uint n){Array.Copy(BitConverter.GetBytes(n),0,b,at,4);}
+ static void FormatFloat(byte[] b,int at,float n){Array.Copy(BitConverter.GetBytes(n),0,b,at,4);}
+ static void FormatBad(byte[] b,string reason){string why;SpatialFormat.Summary summary;long allocated=0;using(var stream=new FormatStream(b)){
+  Check(!SpatialFormat.Validate(stream,out summary,out why,n=>{Check(n<=SpatialFormat.MaxValidationBytes,"allocation quota exceeded");allocated=n;}),"accepted malformed file: "+reason);
+  Check(summary==null&&!string.IsNullOrEmpty(why)&&why.Contains(reason),"expected '"+reason+"', got '"+why+"'");Check(allocated<=SpatialFormat.MaxValidationBytes,"unbounded validation");
+ }}
+ sealed class FormatStream:Stream {
+  readonly MemoryStream inner;readonly long length,readLimit;internal long ReadBytes,MaxRead;internal bool ThrowOnRead;
+  internal FormatStream(byte[] data,long fakeLength=-1,long limit=-1){inner=new MemoryStream(data,false);length=fakeLength<0?data.Length:fakeLength;readLimit=limit<0?data.Length*2L+128:limit;}
+  public override bool CanRead{get{return true;}}public override bool CanSeek{get{return true;}}public override bool CanWrite{get{return false;}}
+  public override long Length{get{return length;}}public override long Position{get{return inner.Position;}set{inner.Position=value;}}
+  public override int Read(byte[] buffer,int offset,int count){Check(!ThrowOnRead,"cap ran after hashing/reading");MaxRead=Math.Max(MaxRead,count);int got=inner.Read(buffer,offset,count);ReadBytes+=got;Check(ReadBytes<=readLimit,"read work budget exceeded");return got;}
+  public override int ReadByte(){byte[] b=new byte[1];return Read(b,0,1)==0?-1:b[0];}
+  public override long Seek(long offset,SeekOrigin origin){return inner.Seek(offset,origin);}public override void Flush(){}public override void SetLength(long value){throw new NotSupportedException();}public override void Write(byte[] b,int o,int c){throw new NotSupportedException();}
+  protected override void Dispose(bool disposing){if(disposing)inner.Dispose();base.Dispose(disposing);}
+ }
+ [System.Runtime.InteropServices.DllImport("kernel32.dll",SetLastError=true)] static extern bool DeviceIoControl(Microsoft.Win32.SafeHandles.SafeFileHandle handle,uint code,IntPtr input,uint inputSize,IntPtr output,uint outputSize,out uint returned,IntPtr overlapped);
+ static void FormatSidecar(string artifact,byte[] bytes,long size=-1){var side=SpatialIdentity.ValidateSidecar(SpatialIdentity.ParseStrict(File.ReadAllText(artifact+".json")));var meta=(Dictionary<string,object>)side["artifact"];meta["size"]=size<0?bytes.LongLength:size;meta["sha256"]=CatalogHash(bytes);File.WriteAllText(artifact+".json",SpatialIdentity.SidecarJson(side));}
+ static void FormatTests(){
+  Run("T3a valid exporter layout, JPEG metadata and summary",()=>{
+   foreach(int slices in new[]{1,2,64}){byte[] b=SpatialFixture(slices);string why;SpatialFormat.Summary s;using(var stream=new FormatStream(b)){stream.Position=3;
+    Check(SpatialFormat.Validate(stream,out s,out why),why);Check(s.Slices==slices&&s.Blocks==slices&&s.DenseSlots==5*slices&&s.Vertices==4*slices&&s.Indices==6*slices&&s.MeshBytes==104*slices,"wrong geometry summary");
+    Check(s.ColorOffset==68+28*slices&&s.AlphaOffset==s.ColorOffset+s.ColorBytes&&s.AlphaOffset+s.AlphaBytes==b.Length,"wrong section summary");Check(s.ColorWidth==16&&s.ColorHeight==16&&s.AlphaWidth==16&&s.AlphaHeight==16&&s.AtlasWidth==16&&s.AtlasHeight==16,"wrong JPEG summary");Check(s.ValidationBytes==74,"unexpected validator allocation");
+   }}
+   string root=Fresh("format-fixture");File.WriteAllBytes(Path.Combine(root,"tiny.spatial"),SpatialFixture());Console.WriteLine("INFO  no checked-in SHARP fixture; generated exporter-layout fixture with real JPEGs (owner spatial/pictures untouched)");
+  });
+  Run("T3a compatible boundary values and empty slices",()=>{
+   foreach(int block in new[]{1,256}){var b=SpatialFixture(1,1,1,block);FormatFloat(b,36,0);FormatUInt(b,24,(uint)Math.Max(16,block));FormatUInt(b,28,(uint)Math.Max(16,block));FormatJpegSize(b,true,Math.Max(16,block),Math.Max(16,block));FormatJpegSize(b,false,Math.Max(16,block),Math.Max(16,block));string why;using(var stream=new MemoryStream(b))Check(SpatialFormat.Validate(stream,out why),why);}
+   var max=SpatialFixture(1,64,64,256);FormatUInt(max,24,8192);FormatUInt(max,28,8192);FormatUInt(max,60,16384);FormatUInt(max,64,16384);FormatJpegSize(max,true,8192,8192);FormatJpegSize(max,false,8192,8192);string reason;
+   using(var stream=new MemoryStream(max))Check(SpatialFormat.Validate(stream,out reason),reason);
+   var two=SpatialFixture(2);var empty=two.Take(68).Concat(new byte[10]).Concat(two.Skip(96)).ToArray();FormatUInt(empty,40,4);FormatUInt(empty,44,1);FormatUInt(empty,48,38);
+   using(var stream=new MemoryStream(empty))Check(SpatialFormat.Validate(stream,out reason),reason);
+  });
+  Run("T3a header ranges and aggregate budgets",()=>{
+   FormatBad(new byte[68],"not a Spatial");
+   foreach(int at in new[]{4,8,12,16,24,28,60,64})foreach(uint value in new[]{0u,(uint)(at==12?65:at==16?257:16385),uint.MaxValue}){var b=SpatialFixture();FormatUInt(b,at,value);FormatBad(b,at==12?"slice count":at==16?"block size":at==24||at==28?"atlas dimensions":at>=60?"original dimensions":"image dimensions");}
+   var huge=SpatialFixture();FormatUInt(huge,4,16384);FormatUInt(huge,8,16384);FormatUInt(huge,16,1);FormatFloat(huge,36,0);FormatBad(huge,"dense slot budget");
+   FormatUInt(huge,12,64);FormatBad(huge,"dense slot budget");
+   var aggregate=SpatialFixture();FormatUInt(aggregate,4,4096);FormatUInt(aggregate,8,4096);FormatUInt(aggregate,12,32);FormatBad(aggregate,"dense slot budget"); // Each slice fits; the sum does not.
+   var blocks=SpatialFixture();FormatUInt(blocks,4,8192);FormatUInt(blocks,8,8192);FormatUInt(blocks,16,8);FormatUInt(blocks,44,(uint)SpatialFormat.MaxBlocks+1);FormatBad(blocks,"block budget");
+   var pixels=SpatialFixture();FormatUInt(pixels,24,16384);FormatUInt(pixels,28,4097);FormatBad(pixels,"atlas pixel budget");
+   var grid=SpatialFixture();FormatUInt(grid,16,32);FormatBad(grid,"empty block grid");grid=SpatialFixture();FormatUInt(grid,24,8);FormatBad(grid,"empty atlas grid");
+   foreach(int at in new[]{40,44})foreach(uint v in new[]{0u,100u,uint.MaxValue}){var b=SpatialFixture();FormatUInt(b,at,v);FormatBad(b,at==40?"totalCorners":"totalBlocks");}
+   Check(SpatialFormat.MaxVertices*20+SpatialFormat.MaxIndices*4==SpatialFormat.MaxMeshBytes&&SpatialFormat.MaxMeshBytes<=uint.MaxValue,"mesh limits do not fit UINT");
+   // The outer 16384 bound prevents this overflow through Validate; test the arithmetic primitive for native parity.
+   Check(SpatialFormat.CornerSlots(65535,65535)==4294967296L,"corner multiplication narrowed to uint");
+   bool overflow=false;try{SpatialFormat.CornerSlots(long.MaxValue,1);}catch(OverflowException){overflow=true;}Check(overflow,"corner addition did not check overflow");
+   overflow=false;try{SpatialFormat.CornerSlots(1L<<40,1L<<40);}catch(OverflowException){overflow=true;}Check(overflow,"corner multiplication did not check overflow");
+  });
+  Run("T3a representative grid headroom and bounded mask allocations",()=>{
+   foreach(var dims in new[]{new[]{87,54,286140},new[]{130,73,575520},new[]{260,146,2289810}}){byte[] b=SpatialFixture(30,dims[0],dims[1],32);FormatUInt(b,24,32);FormatUInt(b,28,32);
+    // Tiny JPEG headers are changed to 32x32; metadata-only validation deliberately does not decode entropy data.
+    FormatJpegSize(b,true,32,32);FormatJpegSize(b,false,32,32);string why;SpatialFormat.Summary s;long allocation=0;
+    using(var stream=new FormatStream(b))Check(SpatialFormat.Validate(stream,out s,out why,n=>{Check(n<=SpatialFormat.MaxValidationBytes,"allocation budget exceeded");allocation=n;}),why);
+    Check(s.DenseSlots==dims[2]&&s.ValidationBytes==allocation&&allocation<11000,"representative scene exceeded working budget");
+   }
+   var near=SpatialFixture(1,1447,1447,8);string reason;SpatialFormat.Summary summary;using(var stream=new FormatStream(near))Check(SpatialFormat.Validate(stream,out summary,out reason),reason);Check(summary.DenseSlots==4190513&&summary.ValidationBytes==523887&&summary.ValidationBytes<SpatialFormat.MaxValidationBytes,"large mask budget");
+  });
+  Run("T3a mask counts padding and all four block corners",()=>{
+   var extra=SpatialFixture(1,2,1);extra[76]|=4;FormatBad(extra,"mask popcount"); // Extra unreferenced corner: skipping popcount would accept it.
+   foreach(int at in new[]{68,72}){var b=SpatialFixture();FormatUInt(b,at,100);FormatBad(b,"slice counts exceed mask size");}
+   foreach(byte mask in new byte[]{7,0}){var b=SpatialFixture();b[76]=mask;FormatBad(b,"mask popcount");}
+   var bm=SpatialFixture();bm[93]=0;FormatBad(bm,"mask popcount");
+   foreach(int at in new[]{76,93}){var b=SpatialFixture();b[at]|=128;FormatBad(b,"mask padding");}
+   // Counts and lengths agree, but the block references the absent fourth corner.
+   var missing=SpatialFixture().Where((b,i)=>i<89||i>=93).ToArray();FormatUInt(missing,40,3);FormatUInt(missing,68,3);FormatUInt(missing,48,24);missing[76]=7;FormatBad(missing,"missing depth corners");
+   var sums=SpatialFixture(2);FormatUInt(sums,40,7);FormatBad(sums,"slice sums exceed");
+   sums=SpatialFixture(1,2,1);FormatUInt(sums,40,5);FormatBad(sums,"slice sums differ");
+   sums=SpatialFixture(1,2,1);FormatUInt(sums,44,2);FormatBad(sums,"slice sums differ");
+   foreach(int at in new[]{94,95}){var b=SpatialFixture();b[at]=1;FormatBad(b,"atlas coordinate");}
+  });
+  Run("T3a finite depths focal padding and derived projections",()=>{
+   foreach(int at in new[]{20,77,81,85,89})foreach(float value in new[]{0f,-1f,float.NaN,float.PositiveInfinity,float.NegativeInfinity}){var b=SpatialFixture();FormatFloat(b,at,value);FormatBad(b,at==20?"focal must":"depth must");}
+   foreach(float value in new[]{-1f,8.01f,float.NaN,float.PositiveInfinity,float.NegativeInfinity,float.MaxValue}){var b=SpatialFixture();FormatFloat(b,36,value);FormatBad(b,"uvPadding");}
+   foreach(float value in new[]{0f,8f}){var b=SpatialFixture();FormatFloat(b,36,value);string why;using(var stream=new MemoryStream(b))Check(SpatialFormat.Validate(stream,out why),why);}
+   var extreme=SpatialFixture();FormatFloat(extreme,20,float.Epsilon);FormatBad(extreme,"mesh projection");
+   extreme=SpatialFixture();FormatFloat(extreme,77,float.MaxValue);FormatBad(extreme,"mesh projection");
+   extreme=SpatialFixture();for(int at=77;at<=89;at+=4)FormatFloat(extreme,at,1e20f);FormatBad(extreme,"camera projection");
+   extreme=SpatialFixture();FormatUInt(extreme,60,1);FormatUInt(extreme,64,1);FormatFloat(extreme,20,float.MaxValue);FormatBad(extreme,"camera projection");
+  });
+  Run("T3a exact geometry and section boundaries",()=>{
+   var b=SpatialFixture();var extra=b.Take(96).Concat(new byte[]{0}).Concat(b.Skip(96)).ToArray();FormatUInt(extra,48,29);FormatBad(extra,"geometry end differs");
+   var shortGeometry=b.Where((v,i)=>i!=95).ToArray();FormatUInt(shortGeometry,48,27);FormatBad(shortGeometry,"truncated section");
+   foreach(uint n in new[]{0u,uint.MaxValue}){var geom=SpatialFixture();FormatUInt(geom,48,n);FormatBad(geom,n==0?"trailing bytes":"truncated geometry");}
+   foreach(int at in new[]{52,56}){var empty=SpatialFixture();FormatUInt(empty,at,0);FormatBad(empty,"empty image section");empty=SpatialFixture();FormatUInt(empty,at,uint.MaxValue);FormatBad(empty,"truncated image sections");}
+   FormatBad(b.Concat(new byte[]{0}).ToArray(),"trailing bytes");
+   int alpha=96+formatJpeg.Length;foreach(int cut in new[]{0,1,4,20,48,60,67,68,72,76,77,81,85,89,93,94,95,96,97,98,alpha-1,alpha,alpha+1,b.Length-1})FormatBad(b.Take(cut).ToArray(),"truncated");
+  });
+  Run("T3a JPEG SOI SOFn dimensions and segment limits",()=>{
+   foreach(bool color in new[]{true,false}){
+    string name=color?"color":"alpha";var b=SpatialFixture();int offset=color?96:96+formatJpeg.Length;b[offset]=0;FormatBad(b,name+" JPEG SOI");
+    b=SpatialFixture();FormatJpegSize(b,color,17,16);FormatBad(b,name+" JPEG dimensions");b=SpatialFixture();FormatJpegSize(b,color,16,17);FormatBad(b,name+" JPEG dimensions");
+    b=SpatialFixture();FormatJpegSize(b,color,16384,16384);FormatBad(b,name+" JPEG pixel budget");
+    b=SpatialFixture();b[offset+4]=255;b[offset+5]=255;FormatBad(b,name+" JPEG segment truncated");
+    b=SpatialFixture();b[offset+4]=0;b[offset+5]=1;FormatBad(b,name+" JPEG segment length");
+    b=SpatialFixture();b[offset+3]=218;FormatBad(b,name+" JPEG SOF missing");
+    b=SpatialFixture();int sof=FormatSof(b,offset);b[sof+1]=196;FormatBad(b,name+" JPEG SOF missing");
+    b=SpatialFixture();b[sof+3]=7;FormatBad(b,name+" JPEG SOF truncated");
+    b=SpatialFixture();b[sof+9]=0;FormatBad(b,name+" JPEG SOF layout");
+    b=SpatialFixture();b[sof+1]=194;string why;using(var stream=new MemoryStream(b))Check(SpatialFormat.Validate(stream,out why),"SOF2 header rejected: "+why);
+   }
+  });
+  Run("T3a cap before hash and parsing (counting stream and sparse file)",()=>{
+   string why;SpatialFormat.Summary summary;using(var stream=new FormatStream(SpatialFixture(),SpatialFormat.MaxFileBytes+1)){stream.ThrowOnRead=true;
+    Check(!SpatialFormat.Validate(stream,out summary,out why)&&why.Contains("1 GiB cap")&&stream.ReadBytes==0,"validator read oversized input");
+    Check(!SpatialVerification.CheckArtifact(stream,stream.Length,new string('0',64),out summary,out why)&&why.Contains("1 GiB cap")&&stream.ReadBytes==0,"verification hashed oversized input");
+   }
+   string root=Fresh("format-cap"),photo=Path.Combine(root,"photo.bmp"),store=Path.Combine(root,"store");Bmp(photo,Color.Red);string artifact=CatalogPair(store,photo);byte[] original=File.ReadAllBytes(artifact);long size=SpatialFormat.MaxFileBytes+1;
+   using(var file=new FileStream(artifact,FileMode.Open,FileAccess.ReadWrite,FileShare.None)){uint returned;Check(DeviceIoControl(file.SafeFileHandle,0x900c4,IntPtr.Zero,0,IntPtr.Zero,0,out returned,IntPtr.Zero),"FSCTL_SET_SPARSE failed");file.SetLength(size);}
+   FormatSidecar(artifact,original,size);SpatialIdentity.Pair pair;Check(SpatialIdentity.Classify(artifact+".json",false,out pair)==SpatialIdentity.Classification.Valid,"sparse sidecar fixture invalid");
+   using(var verified=SpatialVerification.Check(1,new SlideSnapshot(photo,File.ReadAllBytes(photo)),pair))Check(verified.Pair==null&&verified.ArtifactInvalid&&verified.ArtifactReason.Contains("1 GiB cap")&&!verified.HasHandle,"cap did not precede hash in Check");
+   using(var stream=new FormatStream(SpatialFixture(),SpatialFormat.MaxFileBytes)){Check(SpatialFormat.CheckLength(stream,out why),"exact cap rejected");}
+  });
+  Run("T3a held-handle hash then format and failure reason",()=>{
+   string root=Fresh("format-check"),photo=Path.Combine(root,"photo.bmp"),store=Path.Combine(root,"store");Bmp(photo,Color.Red);string artifact=CatalogPair(store,photo);SpatialIdentity.Pair pair;SpatialIdentity.Classify(artifact+".json",false,out pair);
+   using(var verified=SpatialVerification.Check(1,new SlideSnapshot(photo,File.ReadAllBytes(photo)),pair))Check(verified.Pair!=null&&verified.Format!=null&&verified.HasHandle&&!Writable(artifact),"valid format did not retain lease");
+   var b=SpatialFixture();b[76]=7;File.WriteAllBytes(artifact,b);
+   using(var verified=SpatialVerification.Check(2,new SlideSnapshot(photo,File.ReadAllBytes(photo)),pair))Check(verified.Pair==null&&verified.ArtifactReason=="artifact hash mismatch"&&!verified.HasHandle,"format checked before hash");
+   FormatSidecar(artifact,b);using(var verified=SpatialVerification.Check(3,new SlideSnapshot(photo,File.ReadAllBytes(photo)),pair))Check(verified.Pair==null&&verified.ArtifactInvalid&&verified.ArtifactReason.Contains("mask popcount")&&!verified.HasHandle,"hash-valid bad geometry attached");Check(Writable(artifact),"failed format retained handle");
+  });
+  Run("T3a 4000 seeded flips/truncations stay within allocation and read quotas",()=>{
+   byte[] good=SpatialFixture(2);var random=new Random(730031);long peak=0;int rejected=0;
+   for(int i=0;i<4000;i++){var b=(byte[])good.Clone();for(int flip=0,n=random.Next(1,9);flip<n;flip++){int p=random.Next(b.Length);b[p]^=(byte)(1<<random.Next(8));}if(i%3==0)Array.Resize(ref b,random.Next(b.Length+1));
+    using(var stream=new FormatStream(b)){string why;SpatialFormat.Summary summary;bool ok=SpatialFormat.Validate(stream,out summary,out why,n=>{Check(n<=SpatialFormat.MaxValidationBytes,"allocation quota exceeded");peak=Math.Max(peak,n);});
+     Check(ok?summary!=null&&why==null:summary==null&&!string.IsNullOrEmpty(why),"missing validation result");if(!ok)rejected++;Check(stream.MaxRead<=SpatialFormat.MaxValidationBytes,"unbounded read buffer");}
+   }Check(rejected>2000,"fuzz corpus did not exercise failures");Console.WriteLine("INFO  fuzz seed 730031: 4000 cases, "+rejected+" rejected, peak reserved bytes "+peak);
+  });
+ }
+ static int FormatSof(byte[] b,int start){int p=start+2;while(p<b.Length){Check(b[p]==255,"bad test JPEG");int m=b[p+1];if(m>=192&&m<=207&&m!=196&&m!=200&&m!=204)return p;p+=2+(b[p+2]<<8)+b[p+3];}throw new Exception("fixture has no SOF");}
+ static void FormatJpegSize(byte[] b,bool color,int width,int height){int start=68+(int)BitConverter.ToUInt32(b,48)+(color?0:(int)BitConverter.ToUInt32(b,52)),p=FormatSof(b,start);b[p+5]=(byte)(height>>8);b[p+6]=(byte)height;b[p+7]=(byte)(width>>8);b[p+8]=(byte)width;}
  static void AttachTests(){
   Run("T2c2 stale source stays flat and heals hint",()=>{
    string root=Fresh("a-stale"),photo=Path.Combine(root,"photo.bmp"),store=Path.Combine(root,"store");Bmp(photo,Color.Red);string artifact=CatalogPair(store,photo);

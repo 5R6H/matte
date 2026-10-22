@@ -39,7 +39,7 @@ sealed class SlideSnapshot:IDisposable {
 
 sealed class SpatialVerification:IDisposable {
  internal readonly long Request;internal readonly SlideSnapshot Image;internal readonly SpatialIdentity.Pair Candidate;
- internal SpatialIdentity.Pair Pair;internal bool SourceMismatch,ArtifactInvalid;FileStream artifact;
+ internal SpatialIdentity.Pair Pair;internal bool SourceMismatch,ArtifactInvalid;internal string ArtifactReason;internal SpatialFormat.Summary Format;FileStream artifact;
  internal SpatialVerification(long request,SlideSnapshot image,SpatialIdentity.Pair candidate){Request=request;Image=image;Candidate=candidate;}
  internal IDisposable TakeSceneLease(){var held=TakeHandle();if(held==null)return null;try{return new SceneLease(held,Image.PinDisplay());}catch{held.Dispose();throw;}}
  sealed class SceneLease:IDisposable {IDisposable artifact,display;internal SceneLease(IDisposable a,IDisposable d){artifact=a;display=d;}public void Dispose(){if(artifact!=null){artifact.Dispose();artifact=null;}if(display!=null){display.Dispose();display=null;}}}
@@ -56,10 +56,18 @@ sealed class SpatialVerification:IDisposable {
     string text;using(var reader=new StreamReader(side,new UTF8Encoding(false,true),false,4096,true))text=reader.ReadToEnd();
     var metadata=SpatialIdentity.ValidateSidecar(SpatialIdentity.ParseStrict(text));var expected=(Dictionary<string,object>)metadata["artifact"];
     result.artifact=new FileStream(pair.Artifact,FileMode.Open,FileAccess.Read,FileShare.Read);
-    if(result.artifact.Length!=long.Parse(expected["size"].ToString(),System.Globalization.CultureInfo.InvariantCulture)||SlideSnapshot.Hash(result.artifact)!=(string)expected["sha256"])throw new IOException("artifact hash mismatch");
+    if(!CheckArtifact(result.artifact,long.Parse(expected["size"].ToString(),System.Globalization.CultureInfo.InvariantCulture),(string)expected["sha256"],out result.Format,out result.ArtifactReason)){
+     result.ArtifactInvalid=true;result.Dispose();return result;
+    }
     result.Pair=pair;
    }
-  }catch(Exception){result.ArtifactInvalid=true;result.Dispose();}return result;
+  }catch(Exception e){result.ArtifactInvalid=true;result.ArtifactReason=e.Message;result.Dispose();}return result;
+ }
+ // All three checks use the same held stream. This seam also permits a counting stream to prove cap-before-hash.
+ internal static bool CheckArtifact(Stream stream,long size,string digest,out SpatialFormat.Summary format,out string why){
+  format=null;if(!SpatialFormat.CheckLength(stream,out why))return false;
+  stream.Position=0;if(stream.Length!=size||SlideSnapshot.Hash(stream)!=digest){why="artifact hash mismatch";return false;}
+  stream.Position=0;return SpatialFormat.Validate(stream,out format,out why);
  }
 }
 
