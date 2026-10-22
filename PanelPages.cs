@@ -17,14 +17,14 @@ using SD=System.Drawing;
 partial class App {
  string page="menu";
  // ------------------------------------------------------------ Spatial page: on / off, camera, Spatial 图片
- List<EntryNeeds> spatialNeeds;int needsGeneration;
+ List<EntryNeeds> spatialNeeds;
  void RefreshSpatial(bool recount){
   if(panel==null)return;
   PaintToggle("SpatialOn",spatialEnabled);
   P<TextBlock>("SpatialState").Text=!spatialEnabled?"已关闭 · 显示普通照片":!SpatialPlays?"列表里还没有 Spatial 图片":"已开启";
   P<StackPanel>("MotionBox").Opacity=spatialEnabled?1:.45;   // still choosable, but it shows it does nothing now
   RefreshSettings();   // the camera choice (MotionSeg)
-  if(recount&&!Generating){int g=++needsGeneration;Task.Run(()=>SpatialNeedsByEntry()).ContinueWith(t=>panel.Dispatcher.BeginInvoke(new Action(()=>{if(g==needsGeneration&&t.Exception==null){spatialNeeds=t.Result;RefreshGenList();GenChanged();}})));}
+  if(recount&&!Generating)LoadSpatialCatalog();
   RefreshGenList();GenChanged();
  }
  // One compact line per playlist entry: a tick (made by 生成, or left out), its name, a short bar of how much of it has
@@ -48,7 +48,7 @@ partial class App {
    var count=new TextBlock{Text=entry.Have+"/"+entry.Photos,FontSize=11.5,MinWidth=48,TextAlignment=TextAlignment.Right,Foreground=(Brush)panel.Resources[done?"Ink3":"Ink2"],VerticalAlignment=VerticalAlignment.Center};Grid.SetColumn(count,3);
    g.Children.Add(tick);g.Children.Add(name);g.Children.Add(bar);g.Children.Add(count);
    var row=new Button{Style=(Style)panel.FindResource("Row"),Height=34,Content=g,IsEnabled=!Generating&&!done,
-    ToolTip=done?"都有 Spatial 图片了":on?"生成时包括这一项 · 点一下不包括":"生成时不包括这一项 · 点一下包括"};
+    ToolTip=(done?"估计已有所需图片":on?"生成时包括这一项 · 点一下不包括":"生成时不包括这一项 · 点一下包括")+" · "+EstimateNote(new[]{entry})};
    if(done)row.Opacity=1;   // nothing to choose, but not greyed out
    row.Click+=delegate{SetSpatialSkipped(entry.Entry,!SpatialSkipped(entry.Entry));RefreshGenList();GenChanged();};
    list.Children.Add(row);}
@@ -57,17 +57,18 @@ partial class App {
  void GenChanged(){
   if(panel==null)return;
   var counts=P<TextBlock>("GenCounts");var btn=P<Button>("GenBtn");var one=P<Button>("GenOneBtn");var note=P<TextBlock>("GenNote");
-  string cur=currentSourcePath;bool curNeeds=cur!=null&&System.IO.File.Exists(cur)&&SpatialPathFor(cur)==null;
+  string cur=currentSourcePath;SpatialCatalog.Photo current;
+  bool curNeeds=cur!=null&&System.IO.File.Exists(cur)&&(spatialCatalog==null||!spatialCatalog.Photos.TryGetValue(cur,out current)||current.Needs);
   if(Generating){
    P<TextBlock>("GenSize").Visibility=Visibility.Collapsed;
    counts.Text=genStuck?genPhase:genHeld!=null?"已暂停 · "+genHeld:genNotice??(genTotal>0?"正在生成 "+genProgress.Current+" / "+genTotal:genPhase);counts.ToolTip="可以关掉面板，会在后台继续";
    btn.Content=genStuck?"再试一次结束":"停止";btn.Style=(Style)panel.FindResource("Pill");btn.IsEnabled=true;one.Visibility=Visibility.Collapsed;
   }else{
    btn.Style=(Style)panel.FindResource("Primary");counts.ToolTip=genPhase!=null&&gen!=null?"上次："+genPhase:null;
-   if(spatialNeeds==null){counts.Text="";btn.Content="生成 Spatial 图片";btn.IsEnabled=false;}
+   if(spatialNeeds==null){counts.Text="尚未检查 · 生成配方未知";btn.Content="生成 Spatial 图片";btn.IsEnabled=true;}
    else{int have=spatialNeeds.Sum(x=>x.Have),photos=spatialNeeds.Sum(x=>x.Photos),todo=spatialNeeds.Where(x=>!SpatialSkipped(x.Entry)).Sum(x=>x.Todo);
-    counts.Text="已有 "+have+" / "+photos+" 张";
-    btn.Content=todo==0?(spatialNeeds.Any(x=>x.Todo>0)?"没有勾选的项目":"都已生成"):"生成 Spatial 图片 · "+todo+" 张";btn.IsEnabled=todo>0&&GeneratorAvailable;
+    counts.Text="估计已有 "+have+" / "+photos+" 张";string estimate=EstimateNote(spatialNeeds);if(estimate.Length>0)counts.Text+=" · "+estimate;
+    btn.Content=todo>0?"生成 Spatial 图片 · 约 "+todo+" 张":"生成 Spatial 图片";btn.IsEnabled=true;
     // what it will take on disk, and what the disk has left
     var size=P<TextBlock>("GenSize");if(todo>0){string free="";try{var drive=new System.IO.DriveInfo(System.IO.Path.GetPathRoot(SpatialCacheDir));free=" · 磁盘剩余 "+SizeText(drive.AvailableFreeSpace).Replace("约 ","");}catch{}
      size.Text="预计占用"+SizeText(todo*spatialFileBytes)+free;size.Visibility=Visibility.Visible;}else size.Visibility=Visibility.Collapsed;}
@@ -85,10 +86,12 @@ partial class App {
   int have=0,photos=0,todo=0;if(spatialNeeds!=null){have=spatialNeeds.Sum(x=>x.Have);photos=spatialNeeds.Sum(x=>x.Photos);todo=spatialNeeds.Where(x=>!SpatialSkipped(x.Entry)).Sum(x=>x.Todo);}
   if(Generating){double share=genTotal>0?Math.Min(1,(genDone+genFailed)/(double)genTotal):0;count.Text=genStuck?"":genTotal>0?genProgress.Current+" / "+genTotal:"";note.Text=genStuck?genPhase:genHeld!=null?"已暂停 · "+genHeld:genNotice??(genTotal>0?"正在生成 · 可以关掉面板，会在后台继续":genPhase);
    bar.ColumnDefinitions[0].Width=new GridLength(share,GridUnitType.Star);bar.ColumnDefinitions[1].Width=new GridLength(1-share,GridUnitType.Star);return;}
-  if(!GeneratorAvailable){PaintSharpEntry(count,note,bar,have,photos);return;}   // 安装 SHARP first (SharpPage.cs)
+  if(!GeneratorAvailable){PaintSharpEntry(count,note,bar,have,photos);note.Text+=" · "+(spatialNeeds==null?"生成配方未知":EstimateNote(spatialNeeds));return;}   // 安装 SHARP first (SharpPage.cs)
   if(spatialNeeds==null){count.Text="";note.Text="正在统计…";return;}
   count.Text=have+" / "+photos;P<TextBlock>("StoreRowSize").Text=spatialCacheBytes>0?SizeText(spatialCacheBytes).Replace("约 ",""):"";
-  note.Text=photos==0?"播放列表是空的":have==photos?"列表里的图片都有了":todo>0?todo+" 张待生成 · 预计占用"+SizeText(todo*spatialFileBytes):"还有 "+(photos-have)+" 张没有 · 都未勾选";
+  note.Text=photos==0?"播放列表是空的":have==photos?"估计已有所需图片 · 仍可检查并生成":todo>0?"约 "+todo+" 张需要生成 · 预计占用"+SizeText(todo*spatialFileBytes):"还有 "+(photos-have)+" 张需要生成 · 都未勾选";
+  string estimate=EstimateNote(spatialNeeds);if(estimate.Length>0)note.Text+=" · "+estimate;
+  if(spatialCatalog!=null&&spatialCatalog.Legacy>0)note.Text+=" · "+spatialCatalog.Legacy+" 张旧格式，需要重新生成";
   bar.ColumnDefinitions[0].Width=new GridLength(Math.Max(0,have),GridUnitType.Star);bar.ColumnDefinitions[1].Width=new GridLength(Math.Max(0,photos-have)+(photos==0?1:0),GridUnitType.Star);
  }
  void GenNoteShow(string text){var n=P<TextBlock>("GenNote");n.Text=text??"";n.Visibility=string.IsNullOrEmpty(text)?Visibility.Collapsed:Visibility.Visible;}
@@ -104,11 +107,11 @@ partial class App {
   var badge=P<StackPanel>("SpatialBadge");var text=P<TextBlock>("SpatialBadgeText");var box=P<Border>("SpatialBadgeBox");
   if(source==null){badge.Visibility=Visibility.Collapsed;return;}badge.Visibility=Visibility.Visible;
   string any;bool has=spatialFiles.TryGetValue(source,out any)&&System.IO.File.Exists(any),fresh=has&&SpatialPathFor(source)!=null;
-  text.Text=fresh?"3D":has?"3D 待更新":"无 3D";
+  text.Text=fresh?"3D 待核对":"需要生成";
   text.Foreground=(Brush)panel.Resources[fresh?"Ink":"Ink3"];box.Background=fresh?(Brush)panel.Resources["FillPress"]:Brushes.Transparent;
   // the same little chip either way: filled when it has 3D, an outline when it has not
   box.BorderBrush=fresh?(Brush)panel.Resources["FillPress"]:(Brush)panel.Resources["Edge"];
-  badge.ToolTip=fresh?"这张有 Spatial 文件，可以 3D 显示":has?"图片改过，3D 文件需要更新 · Spatial 3D 页里可以生成":"这张还没有 3D 文件 · Spatial 3D 页里可以生成";
+  badge.ToolTip=fresh?"提示匹配到 Spatial 图片，播放时仍需核对":"这张需要生成或重新生成 · Spatial 3D 页里可以生成";
  }
 
  void GoPage(string to,int dir){

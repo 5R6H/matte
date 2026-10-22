@@ -40,7 +40,15 @@ partial class App {
   ui=new MessageWindow();CreatePanel();panel.ShowActivated=false;panel.ShowInTaskbar=false;panel.Left=-20000;panel.Top=-20000;panel.Show();
   page="spatialstore";RefreshStore();
  }
- internal void TestClose(){if(panel!=null)panel.Close();if(ui!=null)ui.Dispose();}
+ internal void TestClose(){System.Threading.Interlocked.Increment(ref catalogRequest);if(panel!=null)panel.Close();if(ui!=null)ui.Dispose();}
+ internal void TestCatalog(SpatialCatalog catalog,params string[] photos){ApplySpatialCatalog(catalog,photos.Select(p=>Tuple.Create(p,new List<string>{p})).ToList(),true);}
+ internal string TestSpatialPath(string path){return SpatialPathFor(path);}
+ internal int TestSpatialSlides{get{return spatialSlides.Count;}}
+ internal int[] TestNeeds(){var n=SpatialNeeds();return new[]{n.Photos,n.Missing,n.Unchecked,n.Errors,n.RecipeUnknown?1:0};}
+ internal bool[] TestGenerateButtons(){TestPanelGenText();sharpView="ready";PaintSharp();return new[]{P<System.Windows.Controls.Button>("GenBtn").IsEnabled,P<System.Windows.Controls.Button>("SharpRightBtn").IsEnabled&&(string)P<System.Windows.Controls.Button>("SharpRightBtn").Content=="开始生成"};}
+ internal void TestLoadCatalog(){LoadSpatialCatalog();}
+ internal bool TestCatalogLoading{get{return catalogLoading;}}
+ internal SpatialCatalog TestCatalogResult{get{return spatialCatalog;}}
  internal static uint TestAnalyze(string p){return Analyze(p);}
  internal void TestLoadColourCache(){LoadColourCache();}
  internal uint TestColorFor(string p){return ColorFor(p);}
@@ -84,9 +92,11 @@ static class MatteTests {
   if(args.Length==3&&args[0]=="--hold-lock"){using(SpatialStoreLock.Acquire(args[1],3000)){Console.WriteLine("LOCKED");Console.Out.Flush();System.Threading.Thread.Sleep(int.Parse(args[2]));}return 0;}
   if(args.Contains("--locks")){LockTests();return failures;}
   if(args.Contains("--store")){StoreTests();return failures;}
+  if(args.Contains("--catalog")){CatalogTests();return failures;}
   IdentityTests();if(args.Contains("--identity"))return failures;
   StoreTests();
   LockTests();
+  CatalogTests();
   // ② the store page's sweep runs once, not again and again
   Run("2 store page sweeps once",()=>{
    string photos=Fresh("store-photos");for(int i=0;i<3;i++)Solid(Path.Combine(photos,"p"+i+".jpg"),Color.FromArgb(40*i,90,140),64,48,1);
@@ -682,6 +692,108 @@ exit 0
    }finally{RemoveTestJunction(original);}
   });
  }
+ static Dictionary<string,object> CatalogRecipe(int width=2560){return new Dictionary<string,object>{{"exporter","spatial-photos/1"},{"generator","matte-sharp/1"},{"height",1600},{"width",width},{"model",new string('0',64)},{"upright","exif-v1"}};}
+ static string CatalogHash(byte[] data){using(var sha=System.Security.Cryptography.SHA256.Create())return BitConverter.ToString(sha.ComputeHash(data)).Replace("-","").ToLowerInvariant();}
+ static string CatalogPair(string store,string photo,int width=2560){
+  byte[] data=File.ReadAllBytes(photo),artifact=System.Text.Encoding.UTF8.GetBytes("test spatial");var fields=CatalogRecipe(width);string source=CatalogHash(data),recipe=SpatialIdentity.RecipeSha256(fields),path=SpatialIdentity.ArtifactPath(store,source,recipe);
+  Directory.CreateDirectory(Path.GetDirectoryName(path));File.WriteAllBytes(path,artifact);
+  var sidecar=new Dictionary<string,object>{{"version",1},{"source",new Dictionary<string,object>{{"sha256",source},{"size",data.Length},{"name",Path.GetFileName(photo)}}},{"recipe",new Dictionary<string,object>{{"sha256",recipe},{"fields",fields}}},{"artifact",new Dictionary<string,object>{{"file",Path.GetFileName(path)},{"sha256",CatalogHash(artifact)},{"size",artifact.Length}}},{"created","2026-10-23T01:00:00Z"}};
+  File.WriteAllText(path+".json",SpatialIdentity.SidecarJson(sidecar));return path;
+ }
+ static void CatalogTests(){
+  Run("T2c1 same stems and legacy flat",()=>{
+   string root=Fresh("c-stems"),store=Path.Combine(root,"store"),a=Path.Combine(root,"a","same.jpg"),b=Path.Combine(root,"b","same.jpg"),legacy=Path.Combine(root,"old.jpg");
+   StoreFile(root,@"a\same.jpg",new byte[]{1,2});StoreFile(root,@"b\same.jpg",new byte[]{3,4});File.WriteAllBytes(legacy,new byte[]{5,6});
+   string pa=CatalogPair(store,a),pb=CatalogPair(store,b),desired=SpatialIdentity.RecipeSha256(CatalogRecipe());File.WriteAllText(Path.Combine(store,"old.spatial"),"legacy");File.WriteAllText(Path.Combine(root,"old.spatial"),"legacy next to photo");
+   var first=SpatialCatalog.Load(store,new[]{a,b,legacy},desired);Check(first.Photos.Values.All(p=>p.Status==SpatialCatalog.State.Unchecked),"hashed on initial hint load");
+   var catalog=first.Complete(()=>false);var app=new App(new TestWall()){TestSettings=new MatteSettings{Playlist=new List<string>{a,b,legacy},SpatialFolder=store}};
+   try{app.TestCatalog(catalog,a,b,legacy);Check(app.TestSpatialPath(a)==pa&&app.TestSpatialPath(b)==pb,"same stems attached to the wrong pair");
+    Check(app.TestSpatialPath(legacy)==null&&app.TestSpatialSlides==2,"legacy stem fallback catalogued an unverified picture");Check(app.TestNeeds()[1]==1,"legacy photo not counted as needing generation");
+    Check(catalog.Legacy==1&&catalog.StoreText().Contains("旧格式，需要重新生成"),"legacy count wording");Check(File.Exists(Path.Combine(store,"old.spatial")),"legacy picture mutated");
+   }finally{app.TestClose();}
+  });
+  Run("T2c1 rename and copies reuse content",()=>{
+   string root=Fresh("c-renamed"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"photo.jpg"),renamed=Path.Combine(root,"renamed.png"),copy=Path.Combine(root,"copy.jpg");File.WriteAllBytes(photo,new byte[]{1,2,3});
+   string pair=CatalogPair(store,photo),desired=SpatialIdentity.RecipeSha256(CatalogRecipe());SpatialCatalog.Load(store,new[]{photo},desired).Complete(()=>false);
+   File.Move(photo,renamed);File.Copy(renamed,copy);var first=SpatialCatalog.Load(store,new[]{renamed,copy},desired);Check(first.Photos.Values.All(p=>p.Status==SpatialCatalog.State.Unchecked),"new paths skipped checking");
+   var c=first.Complete(()=>false);Check(c.Photos.Values.All(p=>p.Pair.Artifact==pair&&!p.Needs),"rename/copy requires generation");Check(c.Valid==1&&File.Exists(pair),"renamed the artifact");
+  });
+  Run("T2c1 file id and volume invalidate hints",()=>{
+   string root=Fresh("c-stamp"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"photo.jpg");File.WriteAllBytes(photo,new byte[]{1,2,3});CatalogPair(store,photo);string desired=SpatialIdentity.RecipeSha256(CatalogRecipe());
+   SpatialCatalog.Load(store,new[]{photo},desired).Complete(()=>false);
+   foreach(string part in new[]{"fileId","volume","unavailable"}){
+    var c=SpatialCatalog.Load(store,new[]{photo},desired,path=>{var s=SpatialCatalog.Probe(path);if(part=="fileId")s.fileId=s.fileId==new string('0',16)?new string('1',16):new string('0',16);else if(part=="volume")s.volumeSerial=s.volumeSerial=="00000000"?"11111111":"00000000";else return null;return s;});
+    Check(c.Photos[photo].Status==SpatialCatalog.State.Unchecked&&c.Photos[photo].Pair==null&&c.Photos[photo].Needs,"used hint without matching "+part);
+   }
+   var old=SpatialCatalog.Probe(photo);string replacement=Path.Combine(root,"replacement");File.WriteAllBytes(replacement,new byte[]{7,8,9});File.SetLastWriteTimeUtc(replacement,new DateTime(old.mtimeTicks,DateTimeKind.Utc));File.Delete(photo);File.Move(replacement,photo);
+   Check(SpatialCatalog.Probe(photo).fileId!=old.fileId,"fixture did not change file identity");var changed=SpatialCatalog.Load(store,new[]{photo},desired);Check(changed.Photos[photo].Pair==null,"replacement used old pair");
+   string pair=CatalogPair(store,photo);changed=changed.Complete(()=>false);Check(changed.Photos[photo].Pair.Artifact==pair&&!changed.Photos[photo].Needs,"replacement not catalogued after hash");
+  });
+  Run("T2c1 stale hints remain probable only",()=>{
+   string root=Fresh("c-probable"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"photo.jpg");File.WriteAllBytes(photo,new byte[]{1,2,3});string pair=CatalogPair(store,photo),desired=SpatialIdentity.RecipeSha256(CatalogRecipe());
+   SpatialCatalog.Load(store,new[]{photo},desired).Complete(()=>false);var stamp=SpatialCatalog.Probe(photo);File.WriteAllBytes(photo,new byte[]{4,5,6});File.SetLastWriteTimeUtc(photo,new DateTime(stamp.mtimeTicks,DateTimeKind.Utc));
+   var now=SpatialCatalog.Probe(photo);Check(now.fileId==stamp.fileId&&now.size==stamp.size&&now.mtimeTicks==stamp.mtimeTicks,"stale hint fixture");
+   byte[] bytes=File.ReadAllBytes(pair);bytes[0]^=1;File.WriteAllBytes(pair,bytes); // Full artifact verification would reject it; T2c1 must not claim that verification.
+   var c=SpatialCatalog.Load(store,new[]{photo},desired);Check(c.Photos[photo].Status==SpatialCatalog.State.Hinted&&c.Photos[photo].Pair.Artifact==pair,"probable hint unexpectedly treated as verified or discarded");
+   Check(c.Complete(()=>false).Photos[photo].Status==SpatialCatalog.State.Hinted,"probable pair promoted to verified");
+  });
+  Run("T2c1 index missing corrupt and atomic rebuild",()=>{
+   string root=Fresh("c-index"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"photo.jpg");File.WriteAllBytes(photo,new byte[]{1});CatalogPair(store,photo);string desired=SpatialIdentity.RecipeSha256(CatalogRecipe()),index=Path.Combine(store,"v1","index.json");
+   foreach(bool corrupt in new[]{false,true}){if(corrupt)File.WriteAllText(index,"broken");else if(File.Exists(index))File.Delete(index);
+    var c=SpatialCatalog.Load(store,new[]{photo},desired);Check(c.Photos[photo].Status==SpatialCatalog.State.Unchecked,"bad index accepted");c=c.Complete(()=>false);
+    Check(!c.Photos[photo].Needs&&c.Photos[photo].Status==SpatialCatalog.State.Hinted,"index not rebuilt");var data=new JavaScriptSerializer().DeserializeObject(File.ReadAllText(index));Check(data!=null,"invalid index JSON");
+    Check(!Directory.GetFiles(Path.Combine(store,"v1"),"index.json.tmp-*").Any(),"index temporary leaked");}
+   File.WriteAllText(index,"broken");using(var held=new FileStream(index,FileMode.Open,FileAccess.Read,FileShare.Read)){
+    var c=SpatialCatalog.Load(store,new[]{photo},desired).Complete(()=>false);Check(!c.Photos[photo].Needs&&c.Photos[photo].Pair!=null,"failed index write discarded in-memory hash");Check(File.ReadAllText(index)=="broken","replaced a locked index");}
+  });
+  Run("T2c1 inventory ignores quarantine and stray directories",()=>{
+   string root=Fresh("c-inventory"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"photo.jpg");File.WriteAllBytes(photo,new byte[]{1});string pair=CatalogPair(store,photo),desired=SpatialIdentity.RecipeSha256(CatalogRecipe());
+   foreach(string dir in new[]{"quarantine","stray",new string('A',64)}){string path=Path.Combine(store,"v1",dir);Directory.CreateDirectory(path);File.Copy(pair+".json",Path.Combine(path,Path.GetFileName(pair)+".json"));}
+   string ignored=Path.Combine(Path.GetDirectoryName(pair),"stray.spatial.json");File.WriteAllText(ignored,"bad");
+   var c=SpatialCatalog.Load(store,new[]{photo},desired).Complete(()=>false);Check(c.Valid==1&&c.Invalid==0&&c.Unreadable==0,"enumerated quarantine or stray directory");
+   File.WriteAllText(pair+".json","{\"version\":2}");c=SpatialCatalog.Load(store,new[]{photo},desired);Check(c.Unsupported==1&&c.Photos[photo].Pair==null&&c.Photos[photo].Needs,"unsupported pair catalogued");
+   File.WriteAllText(pair+".json","bad");c=SpatialCatalog.Load(store,new[]{photo},desired);Check(c.Invalid==1,"invalid pair not counted");
+   using(var locked=new FileStream(pair+".json",FileMode.Open,FileAccess.Read,FileShare.None)){c=SpatialCatalog.Load(store,new[]{photo},desired);Check(c.Unreadable==1,"unreadable pair not counted");}
+  });
+  Run("T2c1 unreadable sources are errors",()=>{
+   string root=Fresh("c-errors"),photo=Path.Combine(root,"photo.jpg"),missing=Path.Combine(root,"missing.jpg");File.WriteAllBytes(photo,new byte[]{1});
+   using(var held=new FileStream(photo,FileMode.Open,FileAccess.Read,FileShare.None)){var c=SpatialCatalog.Load(Path.Combine(root,"store"),new[]{photo,missing},null);Check(c.Photos.Values.All(p=>p.Status==SpatialCatalog.State.Error&&p.Needs&&p.Pair==null),"unreadable source counted as done");}
+  });
+  Run("T2c1 desired recipe and estimates do not gate generation",()=>{
+   string root=Fresh("c-buttons"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"photo.jpg"),generator=Path.Combine(root,"custom.ps1");File.WriteAllBytes(photo,new byte[]{1});File.WriteAllText(generator,"");string pair=CatalogPair(store,photo),desired=SpatialIdentity.RecipeSha256(CatalogRecipe());
+   var ready=SpatialCatalog.Load(store,new[]{photo},desired).Complete(()=>false);var app=new App(new TestWall()){TestSettings=new MatteSettings{Playlist=new List<string>{photo},SpatialFolder=store,SpatialGenerator=generator}};
+   try{foreach(string want in new[]{desired,null,SpatialIdentity.RecipeSha256(CatalogRecipe(1280))}){
+     var c=SpatialCatalog.Load(store,new[]{photo},want);app.TestCatalog(c,photo);Check(app.TestGenerateButtons().All(x=>x),"zero or unknown estimate disabled generation");
+     Check(app.TestSpatialPath(photo)==pair,"compatible recipe not selected");Check(app.TestNeeds()[1]==(want==desired?0:1),"needs ignored desired recipe");
+     if(want==null)Check(app.TestPanelGenText().Contains("配方未知"),"unknown estimate not shown");
+    }
+    app.TestSettings.SpatialGenerator=null;app.TestCatalog(SpatialCatalog.Load(store,new[]{photo},null),photo);Check(app.TestGenerateButtons().All(x=>x),"missing SHARP disabled unknown estimate action");
+   }finally{app.TestClose();}
+  });
+  Run("T2c1 recipe resolution caches checkpoint and screen hints",()=>{
+   string root=Fresh("c-recipe"),checkpoint=Path.Combine(root,"model");File.WriteAllBytes(checkpoint,new byte[]{1});var fields=CatalogRecipe();string sha=SpatialIdentity.RecipeSha256(fields),text="Recipe: "+SpatialIdentity.Canonical(fields)+"\nRecipeSha: "+sha+"\n";int calls=0;var cache=new SpatialCatalog.RecipeCache();Func<string> describe=()=>{calls++;return text;};
+   Check(cache.Resolve(checkpoint,1920,1080,false,describe)==null&&calls==0,"described missing SHARP");Check(cache.Resolve(checkpoint,1920,1080,true,describe)==sha,"recipe not resolved");cache.Resolve(checkpoint,1920,1080,true,describe);Check(calls==1,"unchanged recipe not cached");
+   cache.Resolve(checkpoint,2560,1600,true,describe);Check(calls==2,"screen not in cache key");File.SetLastWriteTimeUtc(checkpoint,DateTime.UtcNow.AddMinutes(1));cache.Resolve(checkpoint,2560,1600,true,describe);Check(calls==3,"mtime not in cache key");File.WriteAllBytes(checkpoint,new byte[]{1,2});cache.Resolve(checkpoint,2560,1600,true,describe);Check(calls==4,"size not in cache key");
+   Check(SpatialCatalog.ParseRecipe(text.Replace(sha,new string('0',64)))==null&&SpatialCatalog.ParseRecipe(text+text)==null,"invalid desired recipe accepted");
+   Check(new SpatialCatalog.RecipeCache().Resolve(checkpoint,1,1,true,()=>{throw new IOException();})==null,"failed describe not unknown");
+   string script=Path.Combine(root,"describe.ps1");File.WriteAllText(script,"param([switch]$Describe)\r\nif(!$Describe){exit 4}\r\nWrite-Output 'Recipe: "+SpatialIdentity.Canonical(fields)+"'\r\nWrite-Output 'RecipeSha: "+sha+"'\r\n");
+   var task=System.Threading.Tasks.Task.Run(()=>SpatialCatalog.Describe(script));while(!task.IsCompleted)Pump(25);Check(SpatialCatalog.ParseRecipe(task.Result)==sha,"hidden Describe process output not parsed");
+  });
+  Run("T2c1 load hashes in background and applies catalogue",()=>{
+   string root=Fresh("c-background"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"photo.jpg");File.WriteAllBytes(photo,new byte[1024*1024]);string pair=CatalogPair(store,photo);var app=new App(new TestWall()){TestSettings=new MatteSettings{Playlist=new List<string>{photo},SpatialFolder=store}};
+   try{app.TestLoadCatalog();Check(app.TestCatalogLoading&&app.TestSpatialPath(photo)==null,"load synchronously hashed the photo");var timer=System.Diagnostics.Stopwatch.StartNew();while(app.TestCatalogLoading&&timer.ElapsedMilliseconds<5000)Pump(20);
+    Check(!app.TestCatalogLoading&&app.TestSpatialPath(photo)==pair,"background hash did not populate catalogue");Check(app.TestCatalogResult.Photos[photo].Status==SpatialCatalog.State.Hinted,"background result claimed verification");
+   }finally{app.TestClose();}
+  });
+  Run("T2c1 late catalogue cannot replace a newer request",()=>{
+   string root=Fresh("c-late"),store=Path.Combine(root,"store"),a=Path.Combine(root,"a.jpg"),b=Path.Combine(root,"b.jpg");File.WriteAllBytes(a,new byte[]{1});File.WriteAllBytes(b,new byte[]{2});CatalogPair(store,a);string pair=CatalogPair(store,b);
+   var app=new App(new TestWall()){TestSettings=new MatteSettings{Playlist=new List<string>{a},SpatialFolder=store}};
+   try{app.TestLoadCatalog();app.TestSettings.Playlist=new List<string>{b};app.TestLoadCatalog();var timer=System.Diagnostics.Stopwatch.StartNew();while(app.TestCatalogLoading&&timer.ElapsedMilliseconds<5000)Pump(20);
+    Check(app.TestSpatialPath(a)==null&&app.TestSpatialPath(b)==pair&&app.TestSpatialSlides==1,"late catalogue replaced new playlist");
+   }finally{app.TestClose();}
+  });
+ }
+
  static Dictionary<string,object> IdObj(object value){return (Dictionary<string,object>)value;}
  static IEnumerable<Dictionary<string,object>> IdCases(Dictionary<string,object> vectors,string key){return ((List<object>)vectors[key]).Select(IdObj);}
  static void IdReject(Action action,string message){try{action();}catch(FormatException){return;}throw new Exception(message);}

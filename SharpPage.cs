@@ -122,9 +122,9 @@ partial class App {
    P<StackPanel>("SharpReadyBox").Visibility=Visibility.Visible;
    double secs=SharpSecondsPerPhoto;sub.Text="每张约 "+Math.Round(secs)+" 秒 · 在后台生成";
    int todo=spatialNeeds==null?-1:spatialNeeds.Where(x=>!SpatialSkipped(x.Entry)).Sum(x=>x.Todo);
-   P<TextBlock>("SharpReadyCount").Text=todo<0?"正在统计…":todo==0?"列表里的图片都有了":todo+" 张照片待生成";
+   P<TextBlock>("SharpReadyCount").Text=(todo<0?"尚未检查 · 生成配方未知":todo==0?"估计已有所需图片 · 仍可检查并生成":"约 "+todo+" 张照片需要生成")+(spatialNeeds==null?"":" · "+EstimateNote(spatialNeeds));
    P<TextBlock>("SharpReadyTime").Text=todo>0?Minutes(todo*secs):"";
-   if(todo>0)buttons("以后再说","开始生成");else buttons(null,"完成");
+   buttons("以后再说","开始生成");right.IsEnabled=true;
   }
   P<TextBlock>("SharpTitle").Text=title;sub.Visibility=string.IsNullOrEmpty(sub.Text)?Visibility.Collapsed:Visibility.Visible;
  }
@@ -201,6 +201,7 @@ partial class App {
  // user's own in the settings, just that.
  void PaintStoreSharp(){
   if(panel==null)return;var info=P<TextBlock>("StoreSharpInfo");var text=P<TextBlock>("StoreSharpBtnText");var btn=P<Button>("StoreSharpBtn");
+  if(!catalogLoading)LoadSpatialCatalog();PaintCatalogStore();
   btn.IsEnabled=true;btn.Visibility=Visibility.Visible;
   if(SharpBusy){info.Text="正在安装 · "+(int)(sharpTotal>0?sharpDone*100/sharpTotal:0)+"%";text.Text="查看";return;}
   if(CustomGenerator){btn.Visibility=Visibility.Collapsed;info.Text="用设置里指定的生成工具";return;}

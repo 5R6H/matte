@@ -8,8 +8,8 @@ using System.Text.RegularExpressions;
 
 // 生成 Spatial 图片: runs the Spatial generator for the playlist - Matte's own (spatial\SpatialBatch.ps1, SHARP once
 // installed by SharpSetup.cs), or one set as SpatialGenerator in the settings. Matte passes its playlist (-RootsFile),
-// so the generator works on those folders and images only and never recycles anything. Photos whose Spatial file is
-// older than the photo (rotated / flipped) are made again.
+// so the generator works on those folders and images only and never recycles anything. Counts below are estimates;
+// the generator checks source bytes and the desired recipe itself.
 partial class App {
  internal static readonly object StartGate=new object();
  internal static Process StartDirect(ProcessStartInfo psi){lock(StartGate)return Process.Start(psi);}
@@ -30,49 +30,36 @@ partial class App {
  bool genActive,genStuck;   // genStuck: the last run's end could not be confirmed (it may still be running)
  bool Generating{get{return genActive;}}
 
- // What the playlist still needs: photos with no Spatial file, and photos changed since theirs was made. Names used by
- // two different photos are left out: the cache is keyed by name, so they can never get a Spatial file of their own.
- struct Needs{public int Photos,Missing,Outdated;}
- Needs SpatialNeeds(){
-  var images=SourceImages();var stems=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
-  foreach(var p in images){string s=Path.GetFileNameWithoutExtension(p);int n;stems[s]=stems.TryGetValue(s,out n)?n+1:1;}
-  string cache=SpatialCacheDir;var n2=new Needs{Photos=images.Count};
-  foreach(var p in images){
-   if(stems[Path.GetFileNameWithoutExtension(p)]>1)continue;
-   string map=Path.Combine(cache,Path.GetFileNameWithoutExtension(p)+".spatial");
-   if(!File.Exists(map))n2.Missing++;
-   else if(File.GetLastWriteTimeUtc(p)>File.GetLastWriteTimeUtc(map).AddSeconds(2))n2.Outdated++;
-  }
-  return n2;
- }
- // The same per playlist entry (the Spatial page's list): its photos (each counted under the first entry it is in, as
- // the rotation does), how many have an up-to-date Spatial file, how many still need one.
- internal class EntryNeeds{public string Entry;public int Photos,Have,Todo;}
+ // Hints estimate work; they never certify a photo or disable generation.
+ struct Needs{public int Photos,Missing,Unchecked,Errors;public bool RecipeUnknown;}
+ Needs SpatialNeeds(){var n=new Needs{RecipeUnknown=spatialCatalog==null||spatialCatalog.Desired==null};if(spatialCatalog==null)return n;
+  foreach(var p in spatialCatalog.Photos.Values){n.Photos++;if(p.Needs)n.Missing++;if(p.Status==SpatialCatalog.State.Unchecked)n.Unchecked++;if(p.Status==SpatialCatalog.State.Error)n.Errors++;}return n;}
+ internal class EntryNeeds{public string Entry;public int Photos,Have,Todo,Unchecked,Errors;public bool RecipeUnknown;}
  double spatialFileBytes=3.6e6;long spatialCacheBytes;
  static string SizeText(double bytes){double mb=bytes/1048576;return mb<1000?"约 "+Math.Max(1,Math.Round(mb))+" MB":"约 "+(mb/1024).ToString("0.0")+" GB";}
- List<EntryNeeds> SpatialNeedsByEntry(){
+ // Enumerated on the catalogue worker, from a snapshot of playlist entries. Explicit unreadable photos stay listed.
+ List<Tuple<string,List<string>>> SpatialPhotoEntries(IEnumerable<string> entries){
   var excluded=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
   string ex=Path.Combine(Dir,"excluded-folders.txt");if(File.Exists(ex))foreach(string line in File.ReadAllLines(ex)){string n=line.Trim().TrimEnd('\\');if(n.Length>0&&!n.StartsWith("#"))excluded.Add(Path.GetFileName(n));}
   var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);var per=new List<Tuple<string,List<string>>>();
-  foreach(string entry in PlaylistEntries()){var imgs=new List<string>();
-   if(File.Exists(entry)){if(IsImage(entry)&&seen.Add(entry))imgs.Add(entry);}
+  foreach(string entry in entries){var imgs=new List<string>();
+   if(!Directory.Exists(entry)&&IsImage(entry)){if(seen.Add(entry))imgs.Add(entry);}
    else if(Directory.Exists(entry)){var pending=new Stack<string>();pending.Push(entry);
     while(pending.Count>0){string dir=pending.Pop();
      try{foreach(string f in Directory.GetFiles(dir))if(IsImage(f)&&seen.Add(f))imgs.Add(f);
-      foreach(string d in Directory.GetDirectories(dir))if(!excluded.Contains(Path.GetFileName(d)))pending.Push(d);}catch{}}}
-   else continue;
-   per.Add(Tuple.Create(entry,imgs));}
-  var stems=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
-  foreach(var e in per)foreach(var p in e.Item2){string s=Path.GetFileNameWithoutExtension(p);int n;stems[s]=stems.TryGetValue(s,out n)?n+1:1;}
-  string cache=SpatialCacheDir;var result=new List<EntryNeeds>();
-  // the size one Spatial file takes, from those already made (a fair guess before any exist)
-  try{var sizes=new DirectoryInfo(cache).GetFiles("*.spatial").Select(x=>x.Length).ToList();spatialFileBytes=sizes.Count>=3?sizes.Average():3.6e6;spatialCacheBytes=sizes.Sum();}catch{spatialFileBytes=3.6e6;}
-  foreach(var e in per){var r=new EntryNeeds{Entry=e.Item1,Photos=e.Item2.Count};
-   foreach(var p in e.Item2){if(stems[Path.GetFileNameWithoutExtension(p)]>1)continue;
-    string map=Path.Combine(cache,Path.GetFileNameWithoutExtension(p)+".spatial");
-    if(File.Exists(map)&&File.GetLastWriteTimeUtc(p)<=File.GetLastWriteTimeUtc(map).AddSeconds(2))r.Have++;else r.Todo++;}
-   result.Add(r);}
-  return result;
+      foreach(string d in Directory.GetDirectories(dir))if(!excluded.Contains(Path.GetFileName(d)))pending.Push(d);}catch(IOException){}catch(UnauthorizedAccessException){}}}
+   per.Add(Tuple.Create(entry,imgs));}return per;
+ }
+ List<EntryNeeds> SpatialNeedsByEntry(){return spatialNeeds??new List<EntryNeeds>();}
+ static List<EntryNeeds> SpatialNeedsByEntry(SpatialCatalog catalog,List<Tuple<string,List<string>>> per){
+  var result=new List<EntryNeeds>();foreach(var e in per){var r=new EntryNeeds{Entry=e.Item1,Photos=e.Item2.Count,RecipeUnknown=catalog.Desired==null};
+   foreach(string path in e.Item2){SpatialCatalog.Photo p;if(!catalog.Photos.TryGetValue(path,out p)){r.Todo++;r.Unchecked++;continue;}
+    if(p.Needs)r.Todo++;else r.Have++;if(p.Status==SpatialCatalog.State.Unchecked)r.Unchecked++;if(p.Status==SpatialCatalog.State.Error)r.Errors++;}
+   result.Add(r);}return result;
+ }
+ static string EstimateNote(IEnumerable<EntryNeeds> entries){var all=entries.ToList();var parts=new List<string>();
+  if(all.Any(x=>x.RecipeUnknown))parts.Add("生成配方未知，仍可生成");int pending=all.Sum(x=>x.Unchecked),errors=all.Sum(x=>x.Errors);
+  if(pending>0)parts.Add(pending+" 张尚未检查");if(errors>0)parts.Add(errors+" 张无法读取");return string.Join(" · ",parts);
  }
  // Entries left out of 生成 (unticked on the Spatial page); everything else on the playlist is in.
  bool SpatialSkipped(string entry){return settings.SpatialSkip!=null&&settings.SpatialSkip.Any(e=>e.Equals(entry,StringComparison.OrdinalIgnoreCase));}

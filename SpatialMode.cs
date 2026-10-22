@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 
 class SpatialRecord { public string source {get;set;} public string cache {get;set;} }
 class SpatialManifest { public SpatialRecord[] records {get;set;} }
@@ -13,31 +15,40 @@ partial class App {
   spatialEnabled=File.Exists(state)&&File.ReadAllText(state).Trim()=="1";
   LoadSpatialCatalog();
  }
+ SpatialCatalog spatialCatalog;int catalogRequest;bool catalogLoading;
+ readonly SpatialCatalog.RecipeCache desiredRecipe=new SpatialCatalog.RecipeCache();
+ static readonly object catalogGate=new object(); // One hashing worker, including superseded requests.
  void LoadSpatialCatalog(){
-  spatialFiles.Clear();spatialSlides.Clear();
-  try{
-   string cache=SpatialCacheDir;
-   if(!Directory.Exists(cache))return;
-   // .spatial files are keyed by file name only; a name used by two different images could show the wrong depth,
-   // so such names get no Spatial at all.
-   var sources=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);var clashes=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-   foreach(string source in SourceImages()){
-    string stem=Path.GetFileNameWithoutExtension(source);
-    if(sources.ContainsKey(stem))clashes.Add(stem);else sources[stem]=source;
-   }
-   foreach(string stem in clashes)sources.Remove(stem);if(clashes.Count>0)Log("Spatial skipped for "+clashes.Count+" file name(s) used by two different photos");
-   foreach(string map in Directory.GetFiles(cache,"*.spatial",SearchOption.TopDirectoryOnly)){
-    string stem=Path.GetFileNameWithoutExtension(map);string source;
-    if(!sources.TryGetValue(stem,out source)||spatialFiles.ContainsKey(source))continue;
-    spatialSlides.Add(source);spatialFiles[source]=map;
-   }
-  }catch(Exception e){Log("Spatial catalog: "+e.Message);}
+  int request=System.Threading.Interlocked.Increment(ref catalogRequest);catalogLoading=true;
+  spatialFiles.Clear();spatialSlides.Clear();spatialCatalog=null;spatialNeeds=null;
+  string store=SpatialCacheDir;string[] entries=PlaylistEntries().ToArray();
+  bool installed=!CustomGenerator&&SharpInstalled,describe=panel!=null;
+  var screen=System.Windows.Forms.Screen.PrimaryScreen.Bounds;var dispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;
+  Func<bool> cancelled=()=>System.Threading.Volatile.Read(ref catalogRequest)!=request;
+  Action<Action> post=a=>{if(!dispatcher.HasShutdownStarted)dispatcher.BeginInvoke(a);};
+  Task.Run(()=>{lock(catalogGate){
+   if(cancelled())return;
+   try{
+    string desired=describe?desiredRecipe.Resolve(SharpModel,screen.Width,screen.Height,installed,()=>SpatialCatalog.Describe(OwnGenerator)):null;
+    if(cancelled())return;
+    var per=SpatialPhotoEntries(entries);var photos=per.SelectMany(x=>x.Item2).ToList();
+    var hinted=SpatialCatalog.Load(store,photos,desired);
+    post(()=>{if(!cancelled())ApplySpatialCatalog(hinted,per,false);});
+    var complete=hinted.Complete(cancelled);
+    post(()=>{if(!cancelled())ApplySpatialCatalog(complete,per,true);});
+   }catch(Exception e){Log("Spatial catalog: "+e.Message);post(()=>{if(!cancelled())catalogLoading=false;});}
+  }});
  }
- // A Spatial file older than its photo (rotated or flipped since, in 调整图片 or elsewhere) shows the old picture, so
- // it does not count until 生成 Spatial 图片 makes it again (the generator remakes exactly these).
- string SpatialPathFor(string path){string map;if(!spatialFiles.TryGetValue(path,out map)||!File.Exists(map))return null;
-  try{if(!path.StartsWith(Path.Combine(Dir,"display-cache"),StringComparison.OrdinalIgnoreCase)&&File.Exists(path)&&File.GetLastWriteTimeUtc(path)>File.GetLastWriteTimeUtc(map).AddSeconds(2))return null;}catch{}
-  return map;}
+ void ApplySpatialCatalog(SpatialCatalog catalog,List<Tuple<string,List<string>>> per,bool complete){
+  spatialCatalog=catalog;catalogLoading=!complete;spatialFiles.Clear();spatialSlides.Clear();
+  foreach(var kv in catalog.Photos)if(kv.Value.Status==SpatialCatalog.State.Hinted&&kv.Value.Pair!=null){spatialSlides.Add(kv.Key);spatialFiles[kv.Key]=kv.Value.Pair.Artifact;}
+  spatialNeeds=SpatialNeedsByEntry(catalog,per);spatialCacheBytes=catalog.Bytes;
+  int files=catalog.Valid+catalog.Legacy;spatialFileBytes=files>=3?catalog.Bytes/(double)files:3.6e6;
+  if(panel!=null){RefreshSpatial(false);if(page=="sharp")PaintSharp();if(page=="spatialstore")PaintCatalogStore();}
+ }
+ // Probable catalogue entries only. No source/artifact hash here is an attach-time verification.
+ string SpatialPathFor(string path){string map;return spatialFiles.TryGetValue(path,out map)?map:null;}
+ void PaintCatalogStore(){if(panel==null)return;P<System.Windows.Controls.TextBlock>("StoreTotal").Text=spatialCatalog==null?"正在统计…":spatialCatalog.StoreText()+" · "+SizeText(spatialCatalog.Bytes).Replace("约 ","");}
  void SetSpatialEnabled(bool enabled){
   bool previous=spatialEnabled;
   try{
