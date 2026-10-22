@@ -47,7 +47,7 @@ IWallpaper wall; NotifyIcon tray; System.Windows.Forms.Timer poll,fade;
  public App(){
  wall=CreateWallpaper();
  string op=Path.Combine(Dir,"overrides.tsv");if(File.Exists(op))foreach(string line in File.ReadAllLines(op)){string[] x=line.Split('\t');uint v;if(x.Length==2&&uint.TryParse(x[1],out v))overrides[x[0]]=v;}
- string cp=Path.Combine(Dir,PaletteFile);if(File.Exists(cp))foreach(string l in File.ReadAllLines(cp)){string[] x=l.Split('\t');uint v;if(x.Length==2&&uint.TryParse(x[1],out v))cache[x[0]]=v;}
+ LoadColourCache();
  tray=new NotifyIcon();tray.Text="Matte";UpdateTray();
  tray.MouseClick+=delegate(object sender,MouseEventArgs e){TogglePanel(false);};tray.Visible=true;
 
@@ -109,9 +109,11 @@ IWallpaper wall; NotifyIcon tray; System.Windows.Forms.Timer poll,fade;
  string key=Key(path);if(key==last)return;uint color=ColorFor(path);
  last=key;BeginFade(wall.GetBackgroundColor(),color);failures=0;
  }catch(Exception e){if(IsShellGone(e)){try{ReconnectShell();}catch(Exception r){Log("Reconnect: "+r.Message);}return;}if(failures++<3)Log("Check: "+e.Message);}}
+ void LoadColourCache(){string cp=Path.Combine(Dir,PaletteFile);if(File.Exists(cp))foreach(string l in File.ReadAllLines(cp)){string[] x=l.Split('\t');uint v;if(x.Length==2&&uint.TryParse(x[1],out v))cache[x[0]]=v;}}
  void BeginFade(uint start,uint color){from=start;target=color;animation.Restart();fade.Start();}
- // palette-v2.tsv caches AutoColor; the old palette.tsv held the classic colour only and is no longer read.
- const string PaletteFile="palette-v2.tsv";
+ // palette-v3.tsv caches AutoColor. Older files are not read: palette-v2.tsv was worked out before photos were read
+ // upright (a phone's portrait photo analysed on its side), palette.tsv held the classic colour only.
+ const string PaletteFile="palette-v3.tsv";
  uint ColorFor(string path){string key=Key(path);uint color;
  if(!overrides.TryGetValue(path,out color) && !cache.TryGetValue(key,out color)){string source=path;try{color=AutoColor(source);}catch{source=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"Microsoft\\Windows\\Themes\\TranscodedWallpaper");color=AutoColor(source);}cache[key]=color;File.AppendAllText(Path.Combine(Dir,PaletteFile),key+"\t"+color+Environment.NewLine);}
  return color;}

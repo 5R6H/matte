@@ -42,9 +42,31 @@ partial class App {
  }
  internal void TestClose(){if(panel!=null)panel.Close();if(ui!=null)ui.Dispose();}
  internal static uint TestAnalyze(string p){return Analyze(p);}
+ internal void TestLoadColourCache(){LoadColourCache();}
+ internal uint TestColorFor(string p){return ColorFor(p);}
+ internal static string TestKey(string p){return Key(p);}
+ internal bool TestGenerating{get{return Generating;}}
+ internal int TestGenDone{get{return genDone;}}
+ internal int TestGenFailed{get{return genFailed;}}
+ internal string TestRunGenerator(string script){var d=Dispatcher.CurrentDispatcher;genPost=a=>d.BeginInvoke(a);return RunGenerator("cmd.exe","/d /c \""+script+"\"");}
+ // the end of a run as GenFinished handles it: these lines seen, a generator that exited with 0, stopped or not
+ internal void TestFinish(bool stopped,params string[] lines){
+  string why;var g=GenProcess.Start("cmd.exe","/d /c exit 0",l=>{},out why);g.Wait();
+  gen=g;genActive=true;genStopped=stopped;genProgress=new GenProgress();foreach(var l in lines)GenLine(l);GenFinished();g.Close();}
+ internal bool TestStuck{get{return genStuck;}}
+ internal string TestPhase{get{return genPhase;}}
+ internal int TestActiveAtRelease{get{return genActiveAtRelease;}}
+ internal void TestStop(){StopGeneration();}
+ // what the panel shows about generation (its 生成 page and Spatial page summary)
+ internal string TestPanelGenText(){
+  if(panel==null){CreatePanel();panel.ShowActivated=false;panel.ShowInTaskbar=false;panel.Left=-20000;panel.Top=-20000;panel.Show();}
+  GenChanged();PaintGenSummary();return P<System.Windows.Controls.TextBlock>("GenCounts").Text+" | "+P<System.Windows.Controls.TextBlock>("GenSummaryNote").Text+" | "+P<System.Windows.Controls.Button>("GenBtn").Content;}
 }
 
 static class MatteTests {
+ [System.Runtime.InteropServices.DllImport("kernel32.dll",SetLastError=true)] static extern bool DuplicateHandle(IntPtr sourceProcess,IntPtr source,IntPtr targetProcess,out IntPtr target,uint access,bool inherit,uint options);
+ [System.Runtime.InteropServices.DllImport("kernelbase.dll")] static extern bool CompareObjectHandles(IntPtr first,IntPtr second);
+ [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
  static int failures;
  static string Here{get{return AppDomain.CurrentDomain.BaseDirectory;}}
  static string Fresh(string name){string d=Path.Combine(Here,"t-"+name);if(Directory.Exists(d))Directory.Delete(d,true);Directory.CreateDirectory(d);return d;}
@@ -145,7 +167,8 @@ static class MatteTests {
    var s=SettingsStore.Load(p,t=>js.Deserialize<MatteSettings>(t),log.Add);
    Check(s!=null&&s.Interval==60000,"read "+(s==null?"nothing":s.Interval.ToString())+" (want the .bak's 60000)");
    Check(File.Exists(p+".bad"),"the damaged file was not kept aside");
-   File.WriteAllText(p+".bak","");Check(SettingsStore.Load(p,t=>js.Deserialize<MatteSettings>(t),log.Add)==null,"neither reads: should be null");
+   Check(File.ReadAllText(p).Contains("60000"),"the good copy was not put back as the file");
+   File.WriteAllText(p,"{");File.WriteAllText(p+".bak","");Check(SettingsStore.Load(p,t=>js.Deserialize<MatteSettings>(t),log.Add)==null,"neither reads: should be null");
   });
   Run("9 Matte starts with a damaged settings file",()=>{
    ClearSettings();File.WriteAllText(SettingsFile,"{\"Playlist\":[\"C:\\");
@@ -156,6 +179,335 @@ static class MatteTests {
   Run("9 values Matte does not offer go back to the defaults",()=>{
    var s=new MatteSettings{Interval=5,Position=4,Background="bogus",PanelStyle="x",Order="y",Motion="z"};s.Normalize();
    Check(s.Interval==1800000&&s.Position==3&&s.Background=="color"&&s.PanelStyle=="ambient"&&s.Order=="shuffle"&&s.Motion=="follow","not normalized");
+  });
+
+  // Codex's review of 489cc9e
+  // R1: colours worked out before photos were read upright are not reused
+  Run("R1 an old colour cache is not reused",()=>{
+   string d=Fresh("cache"),p=Path.Combine(d,"photo.jpg");Solid(p,Color.FromArgb(200,40,40),80,60,1);
+   string v2=Path.Combine(Here,"palette-v2.tsv"),v3=Path.Combine(Here,"palette-v3.tsv");
+   try{
+    File.WriteAllText(v2,App.TestKey(p)+"\t"+0x010203u+Environment.NewLine);if(File.Exists(v3))File.Delete(v3);
+    var app=new App(new TestWall());app.TestLoadColourCache();uint c=app.TestColorFor(p);
+    Check(c!=0x010203u,"the colour from palette-v2.tsv was reused");
+    File.WriteAllText(v3,App.TestKey(p)+"\t"+0x0A0B0Cu+Environment.NewLine);
+    var again=new App(new TestWall());again.TestLoadColourCache();Check(again.TestColorFor(p)==0x0A0B0Cu,"palette-v3.tsv is not read");
+   }finally{if(File.Exists(v2))File.Delete(v2);if(File.Exists(v3))File.Delete(v3);}
+  });
+  // R2: a recovery keeps a good backup for the next one
+  Run("R2 recovered twice from the same backup",()=>{
+   string d=Fresh("recover"),p=Path.Combine(d,"s.json");var js=new JavaScriptSerializer();var log=new List<string>();
+   Func<MatteSettings> load=()=>SettingsStore.Load(p,t=>js.Deserialize<MatteSettings>(t),log.Add);
+   SettingsStore.Save(p,js.Serialize(new MatteSettings{Interval=60000}));SettingsStore.Save(p,js.Serialize(new MatteSettings{Interval=120000}));
+   File.WriteAllText(p,"{\"Interval\":");var first=load();Check(first!=null&&first.Interval==60000,"first recovery: "+(first==null?"nothing":first.Interval.ToString()));
+   SettingsStore.Save(p,js.Serialize(first));   // what startup does after a recovery
+   File.WriteAllText(p,"{\"Interval\":");var second=load();Check(second!=null&&second.Interval==60000,"second recovery: "+(second==null?"nothing":second.Interval.ToString())+" (want 60000)");
+  });
+  // R3: stopping does not erase a real failure
+  Run("R3 stopped between photos keeps the failure",()=>{
+   var g=Feed("Predicting gaussians for a...","Failed: a.jpg: bad file");g.Cancel();
+   Check(g.Done==0&&g.Failed==1,"done "+g.Done+", failed "+g.Failed+" (want 0, 1)");
+  });
+  Run("R3 stopped during a photo counts it neither way",()=>{
+   var g=Feed("Predicting gaussians for a...","Saved: a.jpg","Predicting gaussians for b...");g.Cancel();
+   Check(g.Done==1&&g.Failed==0,"done "+g.Done+", failed "+g.Failed+" (want 1, 0)");
+  });
+
+  // round 2 of Codex's review
+  Run("R2 a recovery whose copy-back fails still keeps the good backup",()=>{
+   string d=Fresh("recover-locked"),p=Path.Combine(d,"s.json");var js=new JavaScriptSerializer();var log=new List<string>();
+   Func<MatteSettings> load=()=>SettingsStore.Load(p,t=>js.Deserialize<MatteSettings>(t),log.Add);
+   SettingsStore.Save(p,js.Serialize(new MatteSettings{Interval=60000}));SettingsStore.Save(p,js.Serialize(new MatteSettings{Interval=120000}));
+   File.WriteAllText(p,"{\"Interval\":");
+   MatteSettings first;
+   using(new FileStream(p,FileMode.Open,FileAccess.Read,FileShare.Read))first=load();   // the damaged file held open: the copy back fails
+   Check(first!=null&&first.Interval==60000,"first recovery: "+(first==null?"nothing":first.Interval.ToString()));
+   Check(log.Any(l=>l.Contains("restoring the copy")),"the copy back did not fail (the test did not exercise it)");
+   SettingsStore.Save(p,js.Serialize(first));   // what startup does after a recovery
+   File.WriteAllText(p,"{\"Interval\":");var second=load();
+   Check(second!=null&&second.Interval==60000,"second recovery: "+(second==null?"nothing":second.Interval.ToString())+" (want 60000)");
+  });
+
+  // round 3 of Codex's review
+  Run("R2 a save that fails after a recovery is retried without losing the backup",()=>{
+   string d=Fresh("recover-retry"),p=Path.Combine(d,"s.json");var js=new JavaScriptSerializer();var log=new List<string>();
+   Func<MatteSettings> load=()=>SettingsStore.Load(p,t=>js.Deserialize<MatteSettings>(t),log.Add);
+   SettingsStore.Save(p,js.Serialize(new MatteSettings{Interval=60000}));SettingsStore.Save(p,js.Serialize(new MatteSettings{Interval=120000}));
+   File.WriteAllText(p,"{\"Interval\":");
+   MatteSettings first;bool saveFailed=false;
+   using(new FileStream(p,FileMode.Open,FileAccess.Read,FileShare.Read)){
+    first=load();Check(first!=null&&first.Interval==60000,"first recovery");
+    try{SettingsStore.Save(p,js.Serialize(first));}catch(IOException){saveFailed=true;}   // still held: the save fails
+   }
+   Check(saveFailed,"the save while the file was held did not fail (the test did not exercise it)");
+   SettingsStore.Save(p,js.Serialize(first));   // the retry
+   File.WriteAllText(p,"{\"Interval\":");var second=load();
+   Check(second!=null&&second.Interval==60000,"recovery after the retry: "+(second==null?"nothing":second.Interval.ToString())+" (want 60000)");
+  });
+
+
+  // ---- a generation run (GenProcess: created suspended, put in its job, then run; its output read here)
+  Run("R4 the end comes after the last line",()=>{
+   for(int round=0;round<5;round++){
+    var w=Watch(Script("echo Predicting gaussians for a...","echo Saved: a.jpg","echo Predicting gaussians for b...","echo Failed: b.jpg: boom"),true);
+    Check(w.Ended,"the end never came");Check(w.AtEnd==4,"the end came after "+w.AtEnd+" of 4 lines");
+    var g=Feed(w.Lines.ToArray());g.Exit(0);Check(g.Done==1&&g.Failed==1,"done "+g.Done+", failed "+g.Failed+" (want 1, 1)");
+   }
+  });
+  Run("R4 lines after the generator exited still come before the end",()=>{
+   // the generator is a PowerShell script running Python: its last lines can come after the process it started exited.
+   // A child started with start /b inherits the output pipe; it writes the last line a second after the parent exits.
+   var w=Watch(Script("echo Predicting gaussians for a...","start /b cmd /d /c \"ping -n 2 127.0.0.1 >nul & echo Saved: a.jpg\""),true);
+   Check(w.Ended,"the end never came");Check(w.AtEnd==2,"the end came after "+w.AtEnd+" of 2 lines");
+  });
+  Run("R4 an earlier run's output is dropped",()=>{
+   var w=Watch(Script("echo Predicting gaussians for old...","echo Saved: old.jpg"),false,1500);
+   Check(w.Lines.Count==0&&!w.Ended,"an earlier run's "+w.Lines.Count+" lines / end got through");
+  });
+  Run("R4 busy until the run's end is handled, not only while its process runs",()=>{
+   var app=GenApp("busy");
+   string why=app.TestRunGenerator(Script("echo - Processing 1 valid image files -","echo Predicting gaussians for a...","start /b cmd /d /c \"ping -n 2 127.0.0.1 >nul & echo Saved: a.jpg\""));
+   Check(why==null,"did not start: "+why);
+   for(int i=0;i<400&&app.TestGenerating;i++)Pump(25);
+   Check(!app.TestGenerating,"still busy after 10 s");
+   Check(app.TestGenDone==1,"done "+app.TestGenDone+" when no longer busy (want 1: the last line came after the generator exited)");
+  });
+  Run("R3 GenFinished keeps a failure when stopped between photos",()=>{
+   var app=GenApp("finish");
+   app.TestFinish(true,"- Processing 2 valid image files -","Predicting gaussians for a...","Failed: a.jpg: bad file");
+   Check(app.TestGenDone==0&&app.TestGenFailed==1,"done "+app.TestGenDone+", failed "+app.TestGenFailed+" (want 0, 1)");
+   var app2=GenApp("finish2");
+   app2.TestFinish(true,"- Processing 2 valid image files -","Predicting gaussians for a...","Saved: a.jpg","Predicting gaussians for b...");
+   Check(app2.TestGenDone==1&&app2.TestGenFailed==0,"stopped during b: done "+app2.TestGenDone+", failed "+app2.TestGenFailed+" (want 1, 0)");
+  });
+  Run("R4 a failed wait: no success inferred, the run closed, late lines not counted",()=>{
+   var app=GenApp("drain");var wait=App.WaitForEnd;
+   try{
+    App.WaitForEnd=proc=>{System.Threading.Thread.Sleep(400);throw new InvalidOperationException("test: the wait fails");};
+    string why=app.TestRunGenerator(Script("echo - Processing 2 valid image files -","echo Predicting gaussians for a...","start /b cmd /d /c \"ping -n 2 127.0.0.1 >nul & echo Predicting gaussians for b... & echo Saved: b.jpg\""));
+    Check(why==null,"did not start: "+why);
+    for(int i=0;i<200&&app.TestGenerating;i++)Pump(25);
+    Check(!app.TestGenerating,"still busy after the failed wait");
+    Check(app.TestGenDone==0,"done "+app.TestGenDone+" right after the failed wait (want 0: the open photo is not taken as made)");
+    Pump(2500);
+    Check(app.TestGenDone==0,"done "+app.TestGenDone+" after the late lines (want 0: the run is closed)");
+   }finally{App.WaitForEnd=wait;}
+  });
+  Run("R4 a child left behind is ended before the run lets go",()=>{
+   // A child started without the generator's handles (Start-Process: the wait returns when the generator exits, as for a
+   // child that closed its output) is still in the run's job. It says it started and would write to the store 5 s later.
+   var c=LeftBehind(0);
+   try{
+    var app=GenApp("left");string why=app.TestRunGenerator(c.Script);Check(why==null,"did not start: "+why);
+    for(int i=0;i<400&&app.TestGenerating;i++)Pump(25);
+    Check(!app.TestGenerating,"still busy after 10 s");Check(app.TestGenDone==1,"done "+app.TestGenDone);
+    Check(File.Exists(c.Started),"the child never started (the test did not exercise the job)");
+    Check(app.TestActiveAtRelease==0,app.TestActiveAtRelease+" process(es) still in the job as the run let go (want 0)");
+    Pump(6500);
+    Check(!File.Exists(c.Marker),"the child kept running after the run let go: it wrote to the store");
+   }finally{c.Clean();}
+  });
+  Run("R4 the generator is in its job before it runs",()=>{
+   // the gap between creating the process and putting it in its job, made 4 s long: the generator, created suspended,
+   // runs nothing in it, so the child it starts first thing is in the job and is ended with the run
+   var c=LeftBehind(0);var hook=GenProcess.BeforeAssign;
+   try{
+    GenProcess.BeforeAssign=()=>System.Threading.Thread.Sleep(4000);
+    var app=GenApp("suspended");string why=app.TestRunGenerator(c.Script);Check(why==null,"did not start: "+why);
+    for(int i=0;i<600&&app.TestGenerating;i++)Pump(25);
+    Check(!app.TestGenerating,"still busy after 15 s");
+    Check(File.Exists(c.Started),"the child never started");
+    Pump(6500);
+    Check(!File.Exists(c.Marker),"the child got out of the job: it ran while the generator was not yet in it, and wrote to the store");
+   }finally{GenProcess.BeforeAssign=hook;c.Clean();}
+  });
+  Run("R4 no job, no run: nothing of the generator runs",()=>{
+   foreach(var which in new[]{"job","assign"}){
+    string d=Plain("nojob"),marker=Path.Combine(d,"ran.txt");
+    try{
+     if(which=="job")GenProcess.FailJob=true;else GenProcess.FailAssign=true;
+     var app=GenApp("nojob-"+which);string why=app.TestRunGenerator(Script("echo x> \""+marker+"\"","echo Predicting gaussians for a..."));
+     Check(why!=null,which+": the run started without its job");Check(!app.TestGenerating,which+": busy after a refused start");
+     Pump(1500);Check(!File.Exists(marker),which+": the generator ran (it wrote "+marker+")");
+    }finally{GenProcess.FailJob=false;GenProcess.FailAssign=false;try{Directory.Delete(d,true);}catch{}}
+   }
+  });
+  Run("R4 an end that cannot be confirmed keeps Matte busy and says so",()=>{
+   var ensure=App.EnsureEnded;var app=GenApp("unconfirmed");
+   try{
+    App.EnsureEnded=proc=>false;
+    string why=app.TestRunGenerator(Script("echo - Processing 1 valid image files -","echo Predicting gaussians for a...","echo Saved: a.jpg"));Check(why==null,"did not start: "+why);
+    Pump(3000);
+    Check(app.TestGenerating,"Matte let go of the store although the run's end could not be confirmed");
+    Check(app.TestStuck&&app.TestPhase.Contains("重新启动"),"no word of it: "+app.TestPhase);
+    Check(!app.TestPhase.Contains("完成"),"announced as done: "+app.TestPhase);
+    string shown=app.TestPanelGenText();
+    Check(shown.Contains("重新启动")&&!shown.Contains("正在生成"),"the panel shows: "+shown);
+   }finally{App.EnsureEnded=ensure;}
+   app.TestStop();   // 再试一次结束: the job is ended and empty now, so Matte lets go
+   Check(!app.TestGenerating&&!app.TestStuck,"再试一次结束 did not let go");
+  });
+
+  // round 6 of Codex's review: a failed start leaves nothing behind; a failed read is a failed drain, not a crash
+  Run("R7 a start that fails part-way leaves nothing running and no handles behind",()=>{
+   var faults=new Dictionary<string,Action<bool>>{
+    {"resume",on=>GenProcess.FailResume=on},
+    {"assign",on=>GenProcess.FailAssign=on},{"assign, first terminate refused",on=>{GenProcess.FailAssign=on;GenProcess.FailTerminate=on;}}};
+   foreach(var f in faults){
+    string d=Plain("rollback"),marker=Path.Combine(d,"ran.txt"),script=Script("echo x> \""+marker+"\"","echo Predicting gaussians for a...");
+    try{
+     f.Value(true);
+     // warm up once (first-use allocations), then count handles across repeated failed starts
+     string why;var g=GenProcess.Start("cmd.exe","/d /c \""+script+"\"",l=>{},out why);Check(g==null,f.Key+": started");
+     GC.Collect();GC.WaitForPendingFinalizers();Pump(300);int before=System.Diagnostics.Process.GetCurrentProcess().HandleCount;
+     for(int k=0;k<10;k++){g=GenProcess.Start("cmd.exe","/d /c \""+script+"\"",l=>{},out why);Check(g==null,f.Key+": started");Check(why!=null&&!why.Contains("没能确认"),f.Key+": "+why);}
+     GC.Collect();GC.WaitForPendingFinalizers();Pump(500);int after=System.Diagnostics.Process.GetCurrentProcess().HandleCount;
+     Check(after-before<=8,f.Key+": "+(after-before)+" handles more after 10 failed starts");
+     Pump(800);Check(!File.Exists(marker),f.Key+": the generator ran");
+    }finally{f.Value(false);try{Directory.Delete(d,true);}catch{}}
+   }
+  });
+  foreach(int stage in new[]{1,2,3})Run("R7 reader handoff stage "+stage+" closes its handles without collection",()=>{
+   string d=Plain("handoff"),marker=Path.Combine(d,"ran.txt"),script=Script("echo x> \""+marker+"\"");
+   var hook=GenProcess.PipesCreated;
+   try{
+    GenProcess.FailReaderStage=stage;string why;
+    for(int k=0;k<3;k++){
+     IntPtr[] originals=null;var copies=new IntPtr[4];var names=new[]{"stdout read","stdout write","stderr read","stderr write"};
+     try{
+      GenProcess.PipesCreated=handles=>{
+       originals=handles;
+       for(int i=0;i<4;i++)Check(DuplicateHandle(new IntPtr(-1),handles[i],new IntPtr(-1),out copies[i],0,false,2),"duplicate "+names[i]+" failed");
+      };
+      var g=GenProcess.Start("cmd.exe","/d /c \""+script+"\"",l=>{},out why);
+      Check(g==null,"started");Check(!string.IsNullOrEmpty(why)&&!why.Contains("没能确认"),"why: "+why);
+      Check(originals!=null&&copies.All(h=>h!=IntPtr.Zero),"pipe hook did not duplicate all four ends: "+why);
+      // Our write copies keep the first reader alive: check and close them before waiting for that reader's EOF.
+      foreach(int i in new[]{1,3}){
+       Check(!CompareObjectHandles(copies[i],originals[i]),names[i]+" still names the pipe after failed start "+(k+1));
+       CloseHandle(copies[i]);copies[i]=IntPtr.Zero;
+      }
+      Check(!CompareObjectHandles(copies[2],originals[2]),names[2]+" still names the pipe after failed start "+(k+1));
+      for(int n=0;n<100&&CompareObjectHandles(copies[0],originals[0]);n++)System.Threading.Thread.Sleep(10);
+      Check(!CompareObjectHandles(copies[0],originals[0]),names[0]+" still names the pipe after failed start "+(k+1));
+      Check(!File.Exists(marker),"the generator ran");
+     }finally{
+      GenProcess.PipesCreated=hook;
+      foreach(var h in copies)if(h!=IntPtr.Zero)CloseHandle(h);
+     }
+    }
+   }finally{GenProcess.PipesCreated=hook;GenProcess.FailReaderStage=0;try{Directory.Delete(d,true);}catch{}}
+  });
+  Run("R7 an end thread that cannot start ends the run as a failed drain",()=>{
+   var app=GenApp("nowatch");
+   try{
+    App.FailWatcher=true;
+    string why=app.TestRunGenerator(Script("echo - Processing 1 valid image files -","echo Predicting gaussians for a...","ping -n 4 127.0.0.1 >nul","echo Saved: a.jpg"));
+    Check(why==null,"did not start: "+why);
+    for(int i=0;i<300&&app.TestGenerating;i++)Pump(25);
+    Check(!app.TestGenerating,"still busy");Check(app.TestGenDone==0,"done "+app.TestGenDone+" (want 0: not taken as made)");
+    Check(app.TestActiveAtRelease==0,app.TestActiveAtRelease+" process(es) in the job at release");
+   }finally{App.FailWatcher=false;}
+  });
+  Run("R8 a line handler that throws is a failed drain, not a crash",()=>{
+   var disp=Dispatcher.CurrentDispatcher;string why;bool ended=false,drained=true;
+   var g=GenProcess.Start("cmd.exe","/d /c \""+Script("echo one","echo two","echo three")+"\"",l=>{throw new InvalidOperationException("test: the handler throws");},out why);
+   Check(g!=null,"did not start: "+why);
+   try{
+    App.Watch(g,a=>disp.BeginInvoke(a),()=>true,(d,e,left)=>{drained=d;ended=true;});
+    for(int i=0;i<200&&!ended;i++)Pump(25);
+    Check(ended,"the end never came");Check(!drained,"reported as drained although its handler failed");
+   }finally{g.Close();}
+  });
+  Run("R8 after a line handler throws, the generator can still write its output",()=>{
+   // the writer calls WriteFile itself: .NET console streams ignore a broken pipe, Python does not
+   string d=Plain("drain"),ps=Path.Combine(d,"write.ps1"),why;int calls=0;
+   File.WriteAllText(ps,@"$k=Add-Type -Name K -Namespace W -PassThru -MemberDefinition @'
+[DllImport(""kernel32.dll"")] public static extern System.IntPtr GetStdHandle(int n);
+[DllImport(""kernel32.dll"")] public static extern bool WriteFile(System.IntPtr h,byte[] b,int n,out int w,System.IntPtr o);
+'@
+$h=$k::GetStdHandle(-11);$w=0
+$b=[Text.Encoding]::ASCII.GetBytes(""a`r`n"");if(-not $k::WriteFile($h,$b,$b.Length,[ref]$w,[IntPtr]::Zero)){exit 6}
+Start-Sleep -Milliseconds 700
+$b=[Text.Encoding]::ASCII.GetBytes(""b`r`n"");if(-not $k::WriteFile($h,$b,$b.Length,[ref]$w,[IntPtr]::Zero)){exit 7}
+exit 0
+");
+   var g=GenProcess.Start("powershell.exe","-NoProfile -ExecutionPolicy Bypass -File \""+ps+"\"",l=>{calls++;throw new InvalidOperationException("test: the handler throws");},out why);
+   Check(g!=null,"did not start: "+why);
+   try{
+    for(int i=0;i<600&&!g.HasExited;i++)Pump(25);
+    Check(g.HasExited,"the generator never ended");
+    Check(g.ExitCode==0,"the generator's later write failed (exit "+g.ExitCode+"): its output was no longer read");
+    Check(calls==1,"handler called "+calls+" times (want 1: lines after a failure are dropped)");
+   }finally{try{g.Wait();}catch{}g.Close();try{Directory.Delete(d,true);}catch{}}
+  });
+  Run("R8 a failed read is a failed drain, not a crash",()=>{
+   var disp=Dispatcher.CurrentDispatcher;string why;bool ended=false,drained=true;var lines=new List<string>();
+   try{
+    GenProcess.FailRead=true;
+    var g=GenProcess.Start("cmd.exe","/d /c \""+Script("echo one","echo two","echo three")+"\"",l=>disp.BeginInvoke(new Action(()=>lines.Add(l))),out why);
+    Check(g!=null,"did not start: "+why);
+    try{
+     App.Watch(g,a=>disp.BeginInvoke(a),()=>true,(d,e,left)=>{drained=d;ended=true;});
+     for(int i=0;i<200&&!ended;i++)Pump(25);
+     Check(ended,"the end never came");Check(!drained,"reported as drained although a read failed");
+    }finally{g.Close();}
+   }finally{GenProcess.FailRead=false;}
+  });
+  Run("R10 the generator inherits only its input and output, nothing else Matte holds open",()=>{
+   // an inheritable pipe of Matte's own: once Matte closes its copy of the writing end, it reads to its end at once
+   // unless the generator took a copy along
+   using(var other=new System.IO.Pipes.AnonymousPipeServerStream(System.IO.Pipes.PipeDirection.In,HandleInheritability.Inheritable)){
+    string why;var g=GenProcess.Start("cmd.exe","/d /c \""+Script("echo started","ping -n 4 127.0.0.1 >nul")+"\"",l=>{},out why);
+    Check(g!=null,"did not start: "+why);
+    try{
+     other.DisposeLocalCopyOfClientHandle();
+     var t=System.Threading.Tasks.Task.Run(()=>other.ReadByte());
+     bool eof=t.Wait(1500);
+     Check(!g.HasExited,"the generator ended too soon for the check to mean anything");
+     Check(eof&&t.Result==-1,"the generator holds a handle it was never given");
+    }finally{try{g.Wait();}catch{}g.Close();}
+   }
+  });
+  Run("R10 another direct launch cannot inherit the generator's pipe ends",()=>{
+   var hook=GenProcess.InWindow;System.Diagnostics.Process other=null;Exception startError=null;
+   System.Threading.Thread launch=null;System.Threading.Tasks.Task wait=null;GenProcess g=null;
+   bool blocked=false;string why;
+   using(var attempted=new System.Threading.ManualResetEvent(false))using(var started=new System.Threading.ManualResetEvent(false)){
+    try{
+     GenProcess.InWindow=()=>{
+      launch=new System.Threading.Thread(()=>{
+       attempted.Set();
+       try{other=App.StartDirect(new System.Diagnostics.ProcessStartInfo("ping.exe","-n 8 127.0.0.1"){UseShellExecute=false,CreateNoWindow=true});}
+       catch(Exception e){startError=e;}finally{started.Set();}
+      }){IsBackground=true};launch.Start();
+      Check(attempted.WaitOne(1000),"the other launch never attempted to start");
+      blocked=!started.WaitOne(300);
+     };
+     g=GenProcess.Start("cmd.exe","/d /c \""+Script("echo short run")+"\"",l=>{},out why);
+     Check(g!=null,"did not start: "+why);Check(started.WaitOne(3000),"the other launch stayed blocked");
+     Check(startError==null&&other!=null,"other launch: "+startError);
+     wait=System.Threading.Tasks.Task.Run(()=>g.Wait());
+     bool drained=wait.Wait(5000),alive=!other.HasExited;
+     Check(drained&&alive,"drained within 5 s: "+drained+", unrelated child still alive: "+alive+", blocked in window: "+blocked);
+     Check(blocked,"the other launch entered the inheritance window");
+    }finally{
+     GenProcess.InWindow=hook;
+     if(launch!=null)launch.Join(5000);
+     if(other!=null){try{if(!other.HasExited)other.Kill();other.WaitForExit(5000);}finally{other.Dispose();}}
+     if(g!=null){GenJob.Terminate(g.Job);try{if(wait!=null)wait.Wait(5000);}finally{g.Close();}}
+    }
+   }
+  });
+  Run("R10 a handle list that cannot be built is a failed start",()=>{
+   string why;
+   try{GenProcess.FailHandleList=true;var g=GenProcess.Start("cmd.exe","/d /c echo x",l=>{},out why);Check(g==null,"started");Check(why!=null&&why.Contains("句柄"),"why: "+why);}
+   finally{GenProcess.FailHandleList=false;}
+  });
+  Run("native structures have their x64 layouts",()=>{
+   var a=GenProcess.Layout();var b=GenJob.Layout();
+   Check(string.Join(",",a)=="24,104,24,112,80,88,96","SECURITY_ATTRIBUTES, STARTUPINFO, PROCESS_INFORMATION, STARTUPINFOEX, STARTUPINFO.hStd*: "+string.Join(",",a));
+   Check(string.Join(",",b)=="64,48,144,48,112","JOBOBJECT limits, IO_COUNTERS, extended limits, accounting, ProcessMemoryLimit: "+string.Join(",",b));
   });
 
   ClearSettings();
@@ -176,4 +528,36 @@ static class MatteTests {
  }
  static bool Near(uint a,uint b,int tol){for(int k=0;k<3;k++){int x=(int)((a>>(8*k))&255),y=(int)((b>>(8*k))&255);if(Math.Abs(x-y)>tol)return false;}return true;}
  static GenProgress Feed(params string[] lines){var g=new GenProgress();foreach(var l in lines)g.Line(l);return g;}
+ // the generation tests' files go in the temp folder: cmd reads batch files in the console code page, so paths stay plain
+ static string Plain(string name){string d=Path.Combine(Path.GetTempPath(),"matte-"+name+"-"+Guid.NewGuid().ToString("N").Substring(0,8));Directory.CreateDirectory(d);return d;}
+ static string Script(params string[] lines){string f=Path.Combine(Plain("gen"),"gen.cmd");File.WriteAllLines(f,new[]{"@echo off"}.Concat(lines).ToArray());return f;}
+ static App GenApp(string name){var app=new App(new TestWall());var st=new MatteSettings();st.SpatialFolder=Fresh(name+"-cache");app.TestSettings=st;return app;}
+ class Watched{public List<string> Lines=new List<string>();public int AtEnd=-1;public bool Ended;}
+ // a script run as a generator, its lines and end watched the way RunGenerator does (current: whether the run is current)
+ static Watched Watch(string script,bool current,int extraMs=0){
+  var w=new Watched();var disp=Dispatcher.CurrentDispatcher;string why;
+  var p=GenProcess.Start("cmd.exe","/d /c \""+script+"\"",l=>disp.BeginInvoke(new Action(()=>{if(current)w.Lines.Add(l);})),out why);
+  Check(p!=null,"did not start: "+why);
+  App.Watch(p,a=>disp.BeginInvoke(a),()=>current,(drained,ended,left)=>{w.AtEnd=w.Lines.Count;w.Ended=true;});
+  try{for(int i=0;i<300&&!w.Ended&&(current||i<extraMs/25);i++)Pump(25);}
+  finally{try{p.Wait();}catch{}p.Close();}   // GenProcess has no finalizer: what a test starts, it closes
+  return w;
+ }
+ class Child{public string Script,Started,Marker,Dir;public void Clean(){try{Directory.Delete(Dir,true);}catch{}}}
+ // a generator whose first act starts a child outside its handles (Start-Process): the child says it started, and writes
+ // to the store five seconds later unless it is ended
+ static Child LeftBehind(int unused){
+  var c=new Child{Dir=Plain("left")};c.Started=Path.Combine(c.Dir,"started.txt");c.Marker=Path.Combine(c.Dir,"written.txt");
+  string child=Path.Combine(c.Dir,"child.cmd"),launcher=Path.Combine(c.Dir,"launch.ps1");c.Script=Path.Combine(c.Dir,"gen.cmd");
+  File.WriteAllLines(child,new[]{"@echo off","echo x> \""+c.Started+"\"","ping -n 6 127.0.0.1 >nul","echo x> \""+c.Marker+"\""});
+  File.WriteAllText(launcher,"Start-Process -WindowStyle Hidden -FilePath cmd.exe -ArgumentList ('/d /c \"'+'"+child+"'+'\"')"+Environment.NewLine);
+  File.WriteAllLines(c.Script,new[]{"@echo off","echo - Processing 1 valid image files -","powershell -NoProfile -ExecutionPolicy Bypass -File \""+launcher+"\"","echo Predicting gaussians for a...","ping -n 2 127.0.0.1 >nul","echo Saved: a.jpg"});
+  return c;
+ }
+ // a process that prints these lines and exits at once (the generator's output, without the generator)
+ static System.Diagnostics.Process Echo(params string[] lines){
+  string script=Path.Combine(Fresh("echo-"+Guid.NewGuid().ToString("N").Substring(0,6)),"out.cmd");
+  File.WriteAllLines(script,new[]{"@echo off"}.Concat(lines.Select(l=>"echo "+l)).ToArray());
+  return new System.Diagnostics.Process{StartInfo=new System.Diagnostics.ProcessStartInfo("cmd.exe","/d /c \""+script+"\""){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true}};
+ }
 }

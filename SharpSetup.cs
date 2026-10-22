@@ -96,7 +96,7 @@ partial class App {
  // (without long-path support switched on in Windows) cannot pass
  static void DeleteTree(string dir){
   if(!Directory.Exists(dir))return;
-  try{using(var p=Process.Start(new ProcessStartInfo("cmd.exe","/d /c rmdir /s /q \"\\\\?\\"+Path.GetFullPath(dir)+"\""){UseShellExecute=false,CreateNoWindow=true}))p.WaitForExit(120000);}catch{}
+  try{using(var p=StartDirect(new ProcessStartInfo("cmd.exe","/d /c rmdir /s /q \"\\\\?\\"+Path.GetFullPath(dir)+"\""){UseShellExecute=false,CreateNoWindow=true}))p.WaitForExit(120000);}catch{}
   try{if(Directory.Exists(dir))Directory.Delete(dir,true);}catch{}
  }
  void Post(Action a){try{if(ui!=null)ui.BeginInvoke(a);else if(panel!=null)panel.Dispatcher.BeginInvoke(a);else a();}catch{}}
@@ -239,7 +239,7 @@ partial class App {
   var sb=new StringBuilder();
   using(var p=new Process{StartInfo=psi}){
    p.OutputDataReceived+=(s,a)=>{if(a.Data!=null)lock(sb)sb.AppendLine(a.Data);};p.ErrorDataReceived+=(s,a)=>{if(a.Data!=null)lock(sb)sb.AppendLine(a.Data);};
-   p.Start();sharpProc=p;try{p.PriorityClass=ProcessPriorityClass.BelowNormal;}catch{}
+   lock(StartGate)p.Start();sharpProc=p;try{p.PriorityClass=ProcessPriorityClass.BelowNormal;}catch{}
    p.BeginOutputReadLine();p.BeginErrorReadLine();
    while(!p.WaitForExit(1000)){if(sharpCancel){try{KillTree(p.Id);}catch{}break;}if(tick!=null&&!sharpPaused)tick();}
    p.WaitForExit(5000);sharpProc=null;

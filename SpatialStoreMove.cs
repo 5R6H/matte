@@ -66,6 +66,6 @@ static class SpatialStoreMove {
  static void RemoveJunction(string link){if(!IsJunction(link))return;Cmd("rmdir \""+Full(link)+"\"");if(Directory.Exists(link))throw new IOException("无法移除原位置的链接");}
  static void Cmd(string args){
   var psi=new ProcessStartInfo("cmd.exe","/d /c "+args){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-  using(var p=Process.Start(psi)){p.StandardOutput.ReadToEnd();p.StandardError.ReadToEnd();p.WaitForExit(15000);}
+  using(var p=App.StartDirect(psi)){p.StandardOutput.ReadToEnd();p.StandardError.ReadToEnd();p.WaitForExit(15000);}
  }
 }

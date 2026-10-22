@@ -60,8 +60,8 @@ partial class App {
   string cur=currentSourcePath;bool curNeeds=cur!=null&&System.IO.File.Exists(cur)&&SpatialPathFor(cur)==null;
   if(Generating){
    P<TextBlock>("GenSize").Visibility=Visibility.Collapsed;
-   counts.Text=genHeld!=null?"已暂停 · "+genHeld:genNotice??(genTotal>0?"正在生成 "+genProgress.Current+" / "+genTotal:genPhase);counts.ToolTip="可以关掉面板，会在后台继续";
-   btn.Content="停止";btn.Style=(Style)panel.FindResource("Pill");btn.IsEnabled=true;one.Visibility=Visibility.Collapsed;
+   counts.Text=genStuck?genPhase:genHeld!=null?"已暂停 · "+genHeld:genNotice??(genTotal>0?"正在生成 "+genProgress.Current+" / "+genTotal:genPhase);counts.ToolTip="可以关掉面板，会在后台继续";
+   btn.Content=genStuck?"再试一次结束":"停止";btn.Style=(Style)panel.FindResource("Pill");btn.IsEnabled=true;one.Visibility=Visibility.Collapsed;
   }else{
    btn.Style=(Style)panel.FindResource("Primary");counts.ToolTip=genPhase!=null&&gen!=null?"上次："+genPhase:null;
    if(spatialNeeds==null){counts.Text="";btn.Content="生成 Spatial 图片";btn.IsEnabled=false;}
@@ -83,7 +83,7 @@ partial class App {
  void PaintGenSummary(){
   var count=P<TextBlock>("GenSummaryCount");var note=P<TextBlock>("GenSummaryNote");var bar=P<Grid>("GenSummaryBar");
   int have=0,photos=0,todo=0;if(spatialNeeds!=null){have=spatialNeeds.Sum(x=>x.Have);photos=spatialNeeds.Sum(x=>x.Photos);todo=spatialNeeds.Where(x=>!SpatialSkipped(x.Entry)).Sum(x=>x.Todo);}
-  if(Generating){double share=genTotal>0?Math.Min(1,(genDone+genFailed)/(double)genTotal):0;count.Text=genTotal>0?genProgress.Current+" / "+genTotal:"";note.Text=genHeld!=null?"已暂停 · "+genHeld:genNotice??(genTotal>0?"正在生成 · 可以关掉面板，会在后台继续":genPhase);
+  if(Generating){double share=genTotal>0?Math.Min(1,(genDone+genFailed)/(double)genTotal):0;count.Text=genStuck?"":genTotal>0?genProgress.Current+" / "+genTotal:"";note.Text=genStuck?genPhase:genHeld!=null?"已暂停 · "+genHeld:genNotice??(genTotal>0?"正在生成 · 可以关掉面板，会在后台继续":genPhase);
    bar.ColumnDefinitions[0].Width=new GridLength(share,GridUnitType.Star);bar.ColumnDefinitions[1].Width=new GridLength(1-share,GridUnitType.Star);return;}
   if(!GeneratorAvailable){PaintSharpEntry(count,note,bar,have,photos);return;}   // 安装 SHARP first (SharpPage.cs)
   if(spatialNeeds==null){count.Text="";note.Text="正在统计…";return;}
@@ -95,7 +95,7 @@ partial class App {
  // The menu row: what Spatial is doing, in a few words.
  void RefreshSpatialNote(){
   string m=settings.Motion=="reverse"?"反向跟随":settings.Motion=="drift"?"自动环绕":settings.Motion=="random"?"自动手持":"跟随鼠标";
-  P<TextBlock>("SpatialNote").Text=Generating?(genHeld!=null?"生成已暂停":genTotal>0?"生成中 "+(genDone+genFailed)+"/"+genTotal:"生成中…"):spatialEnabled&&!SpatialPlays?"无 3D 图片":spatialEnabled?m:"";
+  P<TextBlock>("SpatialNote").Text=Generating?(genStuck?"生成没能完全结束":genHeld!=null?"生成已暂停":genTotal>0?"生成中 "+(genDone+genFailed)+"/"+genTotal:"生成中…"):spatialEnabled&&!SpatialPlays?"无 3D 图片":spatialEnabled?m:"";
  }
  FrameworkElement PageNamed(string name){return name=="spatial"?(FrameworkElement)P<Grid>("SpatialPage"):name=="spatialfiles"?(FrameworkElement)P<Grid>("SpatialFilesPage"):name=="spatialstore"?(FrameworkElement)P<Grid>("SpatialStorePage"):name=="sharp"?(FrameworkElement)P<Grid>("SharpPage"):name=="settings"?(FrameworkElement)P<Grid>("SettingsPage"):name=="playlist"?(FrameworkElement)P<Grid>("PlaylistPage"):P<StackPanel>("MenuPage");}
 
