@@ -30,6 +30,7 @@ partial class App {
  }
  void PaintStore(){
   var s=storeInfo;if(s==null)return;
+  s.Catalog.SuppressPairs(rejections.Content.Keys);
   P<TextBlock>("StoreSize").Text=SizeText(s.Bytes).Replace("约 ","");
   P<TextBlock>("StorePathWarning").Visibility=StorePathTooLong(s.Dir,settings.SpatialStoreTarget)?Visibility.Visible:Visibility.Collapsed;
   string where=settings.SpatialStoreTarget??s.Dir;P<TextBlock>("StorePath").Text=where.Replace(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"%LOCALAPPDATA%");P<TextBlock>("StorePath").ToolTip=where;
@@ -55,7 +56,9 @@ partial class App {
   sweeping=true;lastSweep=DateTime.Now;lastSweepStore=store;sweepsStarted++;
   var cancel=sweepCancel=new System.Threading.CancellationTokenSource();
   var dispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;string[] roots=PlaylistEntries().ToArray();
+  var bad=new Dictionary<string,SpatialBad.Record>(rejections.Content,StringComparer.Ordinal);
   Task.Run(()=>{
+   try{SpatialBad.Save(store,bad);}catch(Exception e){Log("Spatial rejection cache: "+e.Message);}
    var io=retentionIO??new SpatialRetention.IO();io.Cancelled=()=>cancel.IsCancellationRequested;
    var retained=SpatialRetention.Sweep(store,roots,Recycle,Log,DateTime.UtcNow,io);
    if(cancel.IsCancellationRequested)return Tuple.Create<SpatialIndex.Result,SpatialRetention.Result>(null,retained);
@@ -81,6 +84,7 @@ partial class App {
  void PaintSweep(){
   if(panel==null||storeInfo==null)return;var c=storeInfo.Catalog;var r=lastSweepStore==storeInfo.Dir?retentionResult:null;
   P<TextBlock>("StoreAutoInfo").Text=StoreSummary(c,r);P<TextBlock>("StoreScanFooter").Text=StoreFooter(r);
+  P<TextBlock>("StoreBadInfo").Text=c.Bad+" 张 3D 图片无法读取 · 需要重新生成";P<TextBlock>("StoreBadInfo").Visibility=c.Bad>0?Visibility.Visible:Visibility.Collapsed;
   P<StackPanel>("StoreLegacyBox").Visibility=c.Legacy>0?Visibility.Visible:Visibility.Collapsed;
   P<TextBlock>("StoreLegacyBtnText").Text=legacyArmed?"确认移到回收站":"清理旧格式文件…";
   P<Button>("StoreLegacyBtn").IsEnabled=P<Button>("StoreRegenerateBtn").IsEnabled=!storeMoving&&!Generating&&!legacyCleaning;

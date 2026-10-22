@@ -20,8 +20,9 @@ sealed class SpatialCatalog {
  internal sealed class Photo {internal State Status;internal string Digest;internal SpatialIdentity.Pair Pair;internal bool Needs;}
  internal readonly Dictionary<string,Photo> Photos=new Dictionary<string,Photo>(StringComparer.OrdinalIgnoreCase);
  internal readonly Dictionary<string,List<SpatialIdentity.Pair>> Pairs=new Dictionary<string,List<SpatialIdentity.Pair>>(StringComparer.Ordinal);
- internal int Valid,Unsupported,Invalid,Unreadable,Legacy;internal long Bytes;
+ internal int Valid,Unsupported,Invalid,Unreadable,Legacy,Bad;internal long Bytes;
  internal readonly string Store,Desired;
+ readonly HashSet<string> repairs=new HashSet<string>(StringComparer.Ordinal);
  Dictionary<string,Hint> hints;readonly Func<string,Hint> probe;
  readonly HashSet<string> hashErrors=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
  static readonly Regex Digest=new Regex(@"\A[0-9a-f]{64}\z");
@@ -39,7 +40,7 @@ sealed class SpatialCatalog {
   return Read(store,photos,desired,stat,null);
  }
  static SpatialCatalog Read(string store,IEnumerable<string> photos,string desired,Func<string,Hint> stat,Dictionary<string,Hint> known){
-  var c=new SpatialCatalog(store,desired,stat);if(known==null)c.ReadIndex();else c.hints=new Dictionary<string,Hint>(known,StringComparer.OrdinalIgnoreCase);c.Inventory();
+  var c=new SpatialCatalog(store,desired,stat);if(known==null)c.ReadIndex();else c.hints=new Dictionary<string,Hint>(known,StringComparer.OrdinalIgnoreCase);c.Inventory();c.CountRepairs();
   foreach(string path in photos.Distinct(StringComparer.OrdinalIgnoreCase)){
    var p=new Photo{Status=State.Unchecked,Needs=true};c.Photos[path]=p;
    try{Hint h;var stamp=c.probe(path);if(c.hints.TryGetValue(path,out h)&&Same(h,stamp)&&Digest.IsMatch(h.sha256??"")){
@@ -57,6 +58,7 @@ sealed class SpatialCatalog {
   }catch{hints.Clear();}
  }
  void Inventory(){
+  var bad=SpatialBad.Load(Store);foreach(var r in bad.Values)foreach(string key in SpatialBad.Keys(r))repairs.Add(key);Bad=repairs.Count;
   try{if(Directory.Exists(Store))foreach(var f in new DirectoryInfo(Store).GetFiles("*.spatial",SearchOption.TopDirectoryOnly)){Legacy++;Bytes+=f.Length;}}
   catch(IOException){Unreadable++;}catch(UnauthorizedAccessException){Unreadable++;}
   string root=Path.Combine(Store,"v1");if(!Directory.Exists(root))return;
@@ -65,11 +67,13 @@ sealed class SpatialCatalog {
     try{foreach(string path in Directory.EnumerateFiles(dir,"*.spatial.json",SearchOption.TopDirectoryOnly)){
       if(!PairName.IsMatch(Path.GetFileName(path)))continue;
       SpatialIdentity.Pair pair;var result=SpatialIdentity.Classify(path,false,out pair);
-      if(result==SpatialIdentity.Classification.Valid){Valid++;List<SpatialIdentity.Pair> list;if(!Pairs.TryGetValue(pair.SourceSha,out list))Pairs[pair.SourceSha]=list=new List<SpatialIdentity.Pair>();list.Add(pair);try{Bytes+=new FileInfo(pair.Artifact).Length;}catch(IOException){} }
+      if(result==SpatialIdentity.Classification.Valid){string digest=SpatialContent.Read(pair);try{Bytes+=new FileInfo(pair.Artifact).Length;}catch(IOException){}
+       if(digest!=null&&bad.ContainsKey(digest)){repairs.Add(pair.SourceSha+"/"+pair.RecipeSha);Bad=repairs.Count;continue;}Valid++;List<SpatialIdentity.Pair> list;if(!Pairs.TryGetValue(pair.SourceSha,out list))Pairs[pair.SourceSha]=list=new List<SpatialIdentity.Pair>();list.Add(pair); }
       else if(result==SpatialIdentity.Classification.Unsupported)Unsupported++;else if(result==SpatialIdentity.Classification.Invalid)Invalid++;else Unreadable++;
     }}catch(IOException){Unreadable++;}catch(UnauthorizedAccessException){Unreadable++;}
    }}catch(IOException){Unreadable++;}catch(UnauthorizedAccessException){Unreadable++;}
  }
+ void CountRepairs(){foreach(var list in Pairs.Values)foreach(var p in list)repairs.Remove(p.SourceSha+"/"+p.RecipeSha);Bad=repairs.Count;}
  // The app schedules one worker at a time. Hash with a read-only sharing handle; never keep photo buffers.
  internal void HashMissing(Func<bool> cancelled){
   foreach(var kv in Photos){if(cancelled())break;if(kv.Value.Status!=State.Unchecked)continue;
@@ -85,9 +89,17 @@ sealed class SpatialCatalog {
  internal SpatialCatalog Complete(Func<bool> cancelled){HashMissing(cancelled);var next=Read(Store,Photos.Keys,Desired,probe,hints);
   foreach(string path in hashErrors){next.Photos[path].Status=State.Error;next.Photos[path].Pair=null;next.Photos[path].Needs=true;}return next;}
  internal void DropHint(string path){hints.Remove(path);Photo p;if(Photos.TryGetValue(path,out p)){p.Status=State.Unchecked;p.Digest=null;p.Pair=null;p.Needs=true;}}
- internal void SuppressPairs(IEnumerable<string> rejected){var bad=new HashSet<string>(rejected,StringComparer.OrdinalIgnoreCase);
-  foreach(var list in Pairs.Values){int removed=list.RemoveAll(p=>bad.Contains(p.Artifact));Valid-=removed;Invalid+=removed;}
-  foreach(var p in Photos.Values)if(p.Digest!=null){List<SpatialIdentity.Pair> pairs;if(Pairs.TryGetValue(p.Digest,out pairs)){p.Pair=SpatialIdentity.Select(p.Digest,Desired,pairs);p.Needs=Desired==null||!pairs.Any(x=>x.RecipeSha==Desired);}}
+ // A failed identity/read check invalidates a cheap catalogue hint, not the expected artifact digest.
+ // Re-hash just those destinations on the worker, so a repaired sidecar can be recognized immediately.
+ internal void RecheckArtifacts(IEnumerable<string> paths){var check=new HashSet<string>(paths,StringComparer.OrdinalIgnoreCase);
+  foreach(var list in Pairs.Values){int removed=list.RemoveAll(p=>check.Contains(p.Artifact)&&!MatchesArtifact(p));Valid-=removed;Invalid+=removed;}
+  SuppressPairs(new string[0]);
+ }
+ static bool MatchesArtifact(SpatialIdentity.Pair pair){try{using(var f=new FileStream(pair.Artifact,FileMode.Open,FileAccess.Read,FileShare.Read)){
+   if(f.Length>SpatialFormat.MaxFileBytes)return false;return SlideSnapshot.Hash(f)==SpatialContent.Digest(pair);}}catch{return false;}}
+ internal void SuppressPairs(IEnumerable<string> rejected){var bad=new HashSet<string>(rejected,StringComparer.Ordinal);
+  foreach(var list in Pairs.Values){foreach(var p in list.Where(p=>bad.Contains(SpatialContent.Digest(p))))repairs.Add(p.SourceSha+"/"+p.RecipeSha);int removed=list.RemoveAll(p=>bad.Contains(SpatialContent.Digest(p)));Valid-=removed;}
+  CountRepairs();foreach(var p in Photos.Values)if(p.Digest!=null){List<SpatialIdentity.Pair> pairs;if(Pairs.TryGetValue(p.Digest,out pairs)){p.Pair=SpatialIdentity.Select(p.Digest,Desired,pairs);p.Needs=Desired==null||!pairs.Any(x=>x.RecipeSha==Desired);}}
  }
  internal void SaveIndex(){string path=Path.Combine(Store,"v1","index.json"),temp=path+".tmp-"+Guid.NewGuid().ToString("N");
   try{Directory.CreateDirectory(Path.GetDirectoryName(path));var j=new JavaScriptSerializer{MaxJsonLength=int.MaxValue};

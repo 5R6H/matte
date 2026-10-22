@@ -38,14 +38,14 @@ def stop_child(process):
 
 
 @contextlib.contextmanager
-def deny_read(path):
+def deny_read(path, share=0):
     from ctypes import wintypes
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
     kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
                                   wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
     kernel.CreateFileW.restype = wintypes.HANDLE
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-    handle = kernel.CreateFileW(str(path), 0x80000000, 0, None, 3, 0, None)
+    handle = kernel.CreateFileW(str(path), 0x80000000, share, None, 3, 0, None)
     if handle == ctypes.c_void_p(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
     try:
@@ -96,6 +96,90 @@ class PublishTests(unittest.TestCase):
         self.assertEqual('Valid', identity.classify(sidecar, True))
         self.assertEqual(['- Processing 1 valid image files -', f'Predicting gaussians for {self.photo}...', 'Saved: photo.jpg'], self.lines)
         self.assertFalse((self.store / 'photo.spatial').exists())
+
+    def mark_bad(self):
+        artifact, sidecar = self.paths()
+        meta = identity.parse_strict(sidecar.read_text())
+        digest = meta['artifact']['sha256']
+        records = {'version': 1, 'artifacts': {digest: {
+            'sourceSha': meta['source']['sha256'], 'recipeSha': meta['recipe']['sha256'],
+            'name': self.photo.name, 'reason': 'Jpeg'}}}
+        with publish.StoreLock(self.lock):
+            (self.store / 'v1' / 'bad.json').write_text(json.dumps(records), encoding='utf-8')
+        return digest
+
+    def test_bad_equal_bytes_fail_without_saved_or_retry_loop(self):
+        self.assertEqual(0, self.run_photos())
+        artifact, sidecar = self.paths()
+        before = artifact.read_bytes(), sidecar.read_bytes()
+        self.mark_bad()
+        # Sidecar metadata (or its serialization) cannot rehabilitate content.
+        sidecar.write_bytes(before[1] + b'\n')
+        self.assertTrue(publish.needs(self.store, identity.sha256(self.photo.read_bytes()), identity.recipe_sha256(fields())))
+        self.lines.clear(); self.made.clear()
+        self.assertEqual(1, self.run_photos())
+        self.assertEqual([b'original-photo'], self.made)
+        self.assertIn('Failed: photo.jpg: regenerated file is still unreadable', self.lines)
+        self.assertFalse(any(line.startswith('Saved:') for line in self.lines))
+        self.assertEqual(before[0], artifact.read_bytes())
+        self.assertFalse(list((self.store / 'v1').rglob('*.tmp-*')))
+
+    def test_bad_pair_quarantines_then_different_bytes_publish(self):
+        self.assertEqual(0, self.run_photos())
+        artifact, sidecar = self.paths()
+        before = artifact.read_bytes(), sidecar.read_bytes()
+        digest = self.mark_bad(); self.lines.clear()
+        def make(data, temp):
+            Path(temp).write_bytes(b'repaired:' + data)
+        self.assertEqual(0, self.run_photos(make=make))
+        self.assertIn('Saved: photo.jpg', self.lines)
+        self.assertEqual(b'repaired:original-photo', artifact.read_bytes())
+        quarantined = list((self.store / 'v1' / 'quarantine').iterdir())
+        self.assertEqual(2, len(quarantined))
+        self.assertEqual(set(before), {p.read_bytes() for p in quarantined})
+        self.assertIn(digest, publish.bad_records(self.store), 'old digest was rehabilitated')
+        self.assertFalse(publish.needs(self.store, identity.sha256(self.photo.read_bytes()), identity.recipe_sha256(fields())))
+
+    def test_bad_publication_check_sees_rejection_added_during_generation(self):
+        # Start absent; another writer publishes a Valid but rejected pair before this publication commits.
+        def hook(step, path):
+            if step == 'temp_written':
+                publish.publish_one(self.photo, self.store, fields(), self.lock, fake_make)
+                self.mark_bad()
+        self.assertEqual(0, self.run_photos(make=lambda data, temp: Path(temp).write_bytes(b'new'), hook=hook))
+        artifact, sidecar = self.paths()
+        self.assertEqual(b'new', artifact.read_bytes(), 'publication discarded repair for an occupied bad pair')
+        self.assertEqual(2, len(list((self.store / 'v1' / 'quarantine').iterdir())))
+
+    def test_bad_digest_rejected_even_after_matte_quarantined_destination(self):
+        self.assertEqual(0, self.run_photos()); self.mark_bad()
+        artifact, sidecar = self.paths()
+        with publish.StoreLock(self.lock):
+            publish._quarantine(self.store, identity.sha256(self.photo.read_bytes()), identity.recipe_sha256(fields()), artifact, sidecar, [])
+        self.lines.clear()
+        self.assertEqual(1, self.run_photos())
+        self.assertIn('Failed: photo.jpg: regenerated file is still unreadable', self.lines)
+        self.assertFalse(artifact.exists()); self.assertFalse(sidecar.exists())
+
+    def test_bad_pair_held_defers_both_files_and_retries_only_on_next_run(self):
+        self.assertEqual(0, self.run_photos()); self.mark_bad()
+        artifact, sidecar = self.paths()
+        before = artifact.read_bytes(), sidecar.read_bytes()
+        with deny_read(artifact, share=1):  # Playback permits reads, but neither writes nor renames.
+            self.assertEqual(1, self.run_photos(make=lambda data, temp: Path(temp).write_bytes(b'new')))
+            self.assertEqual(before[0], artifact.read_bytes())
+        self.assertEqual(before[1], sidecar.read_bytes())
+        self.assertEqual(0, self.run_photos(make=lambda data, temp: Path(temp).write_bytes(b'new')))
+
+    def test_corrupt_bad_cache_is_empty_and_does_not_block_existing_pair(self):
+        self.assertEqual(0, self.run_photos())
+        path = self.store / 'v1' / 'bad.json'
+        for content in ('{bad', '{}', 'null', '{"version":1,"artifacts":{"bad":{}}}'):
+            path.write_text(content)
+            self.assertEqual({}, publish.bad_records(self.store))
+            self.made.clear()
+            self.assertEqual(0, self.run_photos())
+            self.assertEqual([], self.made)
 
     def test_process_death_at_each_publication_step(self):
         for step in ('temp_written', 'artifact_renamed', 'sidecar_temp_written'):

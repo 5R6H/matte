@@ -39,7 +39,7 @@ sealed class SlideSnapshot:IDisposable {
 
 sealed class SpatialVerification:IDisposable {
  internal readonly long Request;internal readonly SlideSnapshot Image;internal readonly SpatialIdentity.Pair Candidate;
- internal SpatialIdentity.Pair Pair;internal bool SourceMismatch,ArtifactInvalid;internal string ArtifactReason;internal SpatialFormat.Summary Format;FileStream artifact;
+ internal SpatialIdentity.Pair Pair;internal bool SourceMismatch,ArtifactInvalid,ContentFailure;internal string ArtifactReason,ArtifactDigest;internal SpatialFormat.Summary Format;FileStream artifact;
  internal SpatialVerification(long request,SlideSnapshot image,SpatialIdentity.Pair candidate){Request=request;Image=image;Candidate=candidate;}
  internal IDisposable TakeSceneLease(){var held=TakeHandle();if(held==null)return null;try{return new SceneLease(held,Image.PinDisplay());}catch{held.Dispose();throw;}}
  sealed class SceneLease:IDisposable {IDisposable artifact,display;internal SceneLease(IDisposable a,IDisposable d){artifact=a;display=d;}public void Dispose(){if(artifact!=null){artifact.Dispose();artifact=null;}if(display!=null){display.Dispose();display=null;}}}
@@ -56,18 +56,34 @@ sealed class SpatialVerification:IDisposable {
     string text;using(var reader=new StreamReader(side,new UTF8Encoding(false,true),false,4096,true))text=reader.ReadToEnd();
     var metadata=SpatialIdentity.ValidateSidecar(SpatialIdentity.ParseStrict(text));var expected=(Dictionary<string,object>)metadata["artifact"];
     result.artifact=new FileStream(pair.Artifact,FileMode.Open,FileAccess.Read,FileShare.Read);
-    if(!CheckArtifact(result.artifact,long.Parse(expected["size"].ToString(),System.Globalization.CultureInfo.InvariantCulture),(string)expected["sha256"],out result.Format,out result.ArtifactReason)){
+    if(!CheckArtifact(result.artifact,long.Parse(expected["size"].ToString(),System.Globalization.CultureInfo.InvariantCulture),(string)expected["sha256"],out result.Format,out result.ArtifactReason,out result.ContentFailure,out result.ArtifactDigest)){
      result.ArtifactInvalid=true;result.Dispose();return result;
     }
-    result.Pair=pair;
+    SpatialContent.Set(pair,result.ArtifactDigest);result.Pair=pair;
    }
   }catch(Exception e){result.ArtifactInvalid=true;result.ArtifactReason=e.Message;result.Dispose();}return result;
  }
  // All three checks use the same held stream. This seam also permits a counting stream to prove cap-before-hash.
  internal static bool CheckArtifact(Stream stream,long size,string digest,out SpatialFormat.Summary format,out string why){
-  format=null;if(!SpatialFormat.CheckLength(stream,out why))return false;
-  stream.Position=0;if(stream.Length!=size||SlideSnapshot.Hash(stream)!=digest){why="artifact hash mismatch";return false;}
-  stream.Position=0;return SpatialFormat.Validate(stream,out format,out why);
+  bool content;string actual;return CheckArtifact(stream,size,digest,out format,out why,out content,out actual);
+ }
+ static bool CheckArtifact(Stream stream,long size,string digest,out SpatialFormat.Summary format,out string why,out bool content,out string actual){
+  content=false;actual=null;
+  // Still refuse the cap before hashing. A tiny truncated header can be hashed safely, and then rejected
+  // by content identity; a cap failure has no proven digest and must not poison the sidecar's claimed hash.
+  format=null;if(!SpatialFormat.CheckLength(stream,out why)&&(stream==null||!stream.CanRead||!stream.CanSeek||stream.Length>=SpatialFormat.HeaderBytes))return false;
+  stream.Position=0;actual=SlideSnapshot.Hash(stream);if(stream.Length!=size||actual!=digest){why="artifact hash mismatch";return false;}
+  stream.Position=0;var observed=new ReadObservation(stream);bool valid=SpatialFormat.Validate(observed,out format,out why);content=!valid&&!observed.IOFailed;return valid;
+ }
+ // Validate returns a reason for both structural and read errors. Observe I/O separately so transient reads
+ // never turn into durable content rejection. This wrapper neither owns nor buffers the held artifact.
+ sealed class ReadObservation:Stream {
+  readonly Stream inner;internal bool IOFailed;internal ReadObservation(Stream s){inner=s;}
+  public override int Read(byte[] b,int o,int n){try{return inner.Read(b,o,n);}catch(IOException){IOFailed=true;throw;}}
+  public override int ReadByte(){try{return inner.ReadByte();}catch(IOException){IOFailed=true;throw;}}
+  public override long Length{get{try{return inner.Length;}catch(IOException){IOFailed=true;throw;}}}public override long Position{get{try{return inner.Position;}catch(IOException){IOFailed=true;throw;}}set{try{inner.Position=value;}catch(IOException){IOFailed=true;throw;}}}
+  public override bool CanRead{get{return true;}}public override bool CanSeek{get{return inner.CanSeek;}}public override bool CanWrite{get{return false;}}
+  public override long Seek(long o,SeekOrigin w){try{return inner.Seek(o,w);}catch(IOException){IOFailed=true;throw;}}public override void Flush(){}public override void SetLength(long n){throw new NotSupportedException();}public override void Write(byte[] b,int o,int n){throw new NotSupportedException();}
  }
 }
 
@@ -75,7 +91,7 @@ sealed class SpatialVerification:IDisposable {
 sealed class SpatialLeases:IDisposable {
  readonly Dictionary<int,IDisposable> held=new Dictionary<int,IDisposable>();
  internal void Add(int sequence,IDisposable lease){held.Add(sequence,lease);}
- internal void NativeEvent(int kind,int sequence){if(kind==NativeSpatial.TransitionDone)TransitionDone(sequence);else if(kind==NativeSpatial.LoadError)Failed(sequence);}
+ internal void NativeEvent(int kind,int sequence){if(kind==NativeSpatial.TransitionDone)TransitionDone(sequence);else if(kind==NativeSpatial.LoadError||kind==NativeSpatial.LoadFailed)Failed(sequence);}
  internal void TransitionDone(int sequence){foreach(int n in held.Keys.Where(n=>n<sequence).ToArray())Failed(n);}
  internal void Failed(int sequence){IDisposable h;if(held.TryGetValue(sequence,out h)){held.Remove(sequence);h.Dispose();}}
  public void Dispose(){foreach(int n in held.Keys.ToArray())Failed(n);}

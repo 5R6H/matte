@@ -349,6 +349,7 @@
     <!-- The catalogue summary and the last conservative retention scan. StoreTotal is kept above for older catalogue callbacks. -->
     <Border Padding="12,8"><DockPanel><ContentControl x:Name="StoreAutoIcon" Width="16" Height="16" Margin="0,2,10,0" VerticalAlignment="Top"/>
      <StackPanel><TextBlock Text="自动整理"/><TextBlock x:Name="StoreAutoInfo" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,2,0,0" TextWrapping="Wrap" TextTrimming="None" LineHeight="17"/>
+      <TextBlock x:Name="StoreBadInfo" Visibility="Collapsed" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,2,0,0" TextWrapping="Wrap" LineHeight="17"/>
       <StackPanel x:Name="StoreLegacyBox" Visibility="Collapsed" Margin="0,8,0,0">
        <TextBlock x:Name="StoreLegacyInfo" Text="新版本按照片内容识别 3D 图片，旧格式的 3D 图片无法确认对应哪张照片，为了不显示错误的立体效果，暂时以普通照片显示。重新生成后会恢复立体效果，旧文件不会被自动删除。" FontSize="11.5" Foreground="{DynamicResource Ink3}" TextWrapping="Wrap" TextTrimming="None" LineHeight="17"/>
        <WrapPanel Margin="0,8,0,0"><Button x:Name="StoreRegenerateBtn" Style="{StaticResource Primary}" Height="28" Margin="0,0,6,6"><TextBlock Text="重新生成" FontSize="12.5" Margin="11,0"/></Button>

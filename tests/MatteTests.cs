@@ -76,6 +76,14 @@ partial class App {
  internal DateTime TestCountdown{get{return nextSlide;}}
  internal int TestRotation{get{return slideIndex;}}
  internal SlideSnapshot TestSnapshot{get{return currentImage;}}
+ internal SpatialLoad TestRegisterLoad(object host,int sequence,SpatialVerification verified){var load=spatialLoad=new SpatialLoad(host,sequence,verified);SetUnderneathLater(verified.Image.ShowPath(true,true),verified.Image.Color);return load;}
+ internal void TestLoadFailure(SpatialLoad load,int kind){SpatialLoadFailed(load,kind,kind==NativeSpatial.LoadError?NativeSpatial.FailureReason.Jpeg:NativeSpatial.FailureReason.Allocation,"injected");}
+ internal SpatialLoad TestCurrentLoad{get{return spatialLoad;}set{spatialLoad=value;}}
+ internal string TestWallpaper{get{return wall.GetWallpaper(wall.GetMonitorDevicePathAt(0));}}
+ internal void TestUnderlay(string path){SetUnderneath(path,0);}
+ internal bool TestFlat{get{return shownPair==null;}}
+ internal string TestPendingUnderlay{get{return underPath;}}
+ internal void TestFailureStore(){TestStoreView(spatialCatalog,null);page="spatialstore";}
  internal void TestAhead(string path){slideFiles=new List<string>{path};slideIndex=0;PrepareNextSlide();}
  internal string TestAmbient(SlideSnapshot image){string backdrop;return WallpaperImage(image,"ambient",new Size(160,100),out backdrop);}
  internal static uint TestAnalyze(string p){return Analyze(p);}
@@ -122,6 +130,7 @@ static class MatteTests {
   if(args.Contains("--native")){NativeTests();return failures;}
   if(args.Length==3&&args[0]=="--hold-lock"){using(SpatialStoreLock.Acquire(args[1],3000)){Console.WriteLine("LOCKED");Console.Out.Flush();System.Threading.Thread.Sleep(int.Parse(args[2]));}return 0;}
   if(args.Contains("--format")){FormatTests();return failures;}
+  if(args.Contains("--fallback")){FallbackTests();return failures;}
   if(args.Contains("--locks")){LockTests();return failures;}
   if(args.Contains("--store")){StoreTests();return failures;}
   if(args.Contains("--catalog")){CatalogTests();return failures;}
@@ -132,7 +141,7 @@ static class MatteTests {
   IdentityTests();if(args.Contains("--identity"))return failures;
   StoreTests();
   LockTests();
-  CatalogTests();NativeTests();AttachTests();CacheTests();RetentionTests();StorePageTests();
+  CatalogTests();NativeTests();AttachTests();FallbackTests();CacheTests();RetentionTests();StorePageTests();
   // ② the store page's sweep runs once, not again and again
   Run("2 store page sweeps once",()=>{
    string photos=Fresh("store-photos");for(int i=0;i<3;i++)Solid(Path.Combine(photos,"p"+i+".jpg"),Color.FromArgb(40*i,90,140),64,48,1);
@@ -1146,6 +1155,102 @@ exit 0
    string valid=Path.Combine(root,"fault-valid.spatial"),hostile=Path.Combine(root,"fault-hostile.spatial");File.WriteAllBytes(valid,SpatialFixture());var b=SpatialFixture();FormatUInt(b,12,uint.MaxValue);File.WriteAllBytes(hostile,b);
    foreach(var test in new[]{new[]{1,5,103},new[]{2,5,103},new[]{3,3,1},new[]{4,5,104},new[]{5,5,107},new[]{6,5,105},new[]{7,5,106},new[]{8,3,4},new[]{9,5,102}}){string path=test[0]==2||test[0]==3?hostile:valid;NativeProcess("--native-fault \""+path+"\" "+test[0]+" "+test[1]+" "+test[2]);}
    NativeProcess("--native-fault \""+Path.Combine(root,"missing.spatial")+"\" 0 5 101");
+  });
+ }
+ sealed class FailureSink:IDisposable {
+  sealed class TrackedLease:IDisposable {internal IDisposable Inner;internal bool Released;public void Dispose(){if(Inner!=null){Inner.Dispose();Inner=null;}Released=true;}}
+  readonly Dictionary<int,TrackedLease> tracked=new Dictionary<int,TrackedLease>();
+  internal App App;internal object Host=new object();internal int Sequence;internal SpatialLoad Last;
+  internal readonly SpatialLeases Leases=new SpatialLeases();internal readonly List<string> Events=new List<string>();
+  internal void Show(SlideSnapshot image,SpatialVerification verified){Events.Add((verified==null?"flat:":"3d:")+image.Source);
+   if(verified==null)Leases.Dispose();else{var lease=new TrackedLease{Inner=verified.TakeSceneLease()};tracked[++Sequence]=lease;Leases.Add(Sequence,lease);Last=App.TestRegisterLoad(Host,Sequence,verified);}}
+  internal bool Released(int sequence){return tracked[sequence].Released;}
+  internal void Fail(SpatialLoad load,int kind){Leases.NativeEvent(kind,load.Sequence);App.TestLoadFailure(load,kind);}
+  public void Dispose(){Leases.Dispose();if(App!=null)App.TestClose();}
+ }
+ static FailureSink FailureApp(string store,params string[] photos){var sink=new FailureSink();var app=sink.App=new App(new TestWall()){TestSettings=new MatteSettings{Playlist=photos.ToList(),SpatialFolder=store}};
+  app.presentSlide=sink.Show;app.TestCatalog(SpatialCatalog.Load(store,photos,SpatialIdentity.RecipeSha256(CatalogRecipe())).Complete(()=>false),photos);app.TestSpatialOn(true);return sink;}
+ static void RewriteArtifact(string path,byte[] bytes){File.WriteAllBytes(path,bytes);var meta=SpatialIdentity.ValidateSidecar(SpatialIdentity.ParseStrict(File.ReadAllText(path+".json")));var a=(Dictionary<string,object>)meta["artifact"];a["size"]=bytes.Length;a["sha256"]=CatalogHash(bytes);File.WriteAllText(path+".json",SpatialIdentity.SidecarJson(meta));}
+ static void FallbackTests(){
+  foreach(int kind in new[]{NativeSpatial.LoadError,NativeSpatial.LoadFailed})Run("T3c failure before underlay timer installs current snapshot "+kind,()=>{
+   string root=Fresh("f-flat-"+kind),store=Path.Combine(root,"store"),photo=Path.Combine(root,"new.bmp"),old=Path.Combine(root,"old.bmp");Bmp(photo,Color.Red);Bmp(old,Color.Blue);string artifact=CatalogPair(store,photo);
+   using(var sink=FailureApp(store,photo))using(var held=new FileStream(artifact,FileMode.Open,FileAccess.Read,FileShare.Read)){
+    var app=sink.App;app.TestFailureStore();app.TestUnderlay(old);app.TestShow(photo);Until(()=>sink.Last!=null,"no native attempt");string target=sink.Last.Image.ShowPath(true,true);
+    Check(app.TestWallpaper==old&&app.TestPendingUnderlay==target,"fixture missed pending underlay window");sink.Fail(sink.Last,kind);
+    Check(app.TestFlat&&app.TestWallpaper==target&&app.TestPendingUnderlay==null&&sink.Events.Last()=="flat:"+photo,"failure kept previous underlay or 3D state");Pump(200);
+    if(kind==NativeSpatial.LoadError){Until(()=>SpatialBad.Load(store).Count==1,"content failure not persisted");Until(()=>app.TestVisible("StoreBadInfo"),"open store page did not refresh bad count");}else Check(!File.Exists(Path.Combine(store,"v1","bad.json"))&&!app.TestVisible("StoreBadInfo"),"runtime error persisted or counted as content");
+   }
+  });
+  Run("T3c runtime is retried once, never persisted or counted as repair",()=>{
+   string root=Fresh("f-runtime"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.bmp");Bmp(photo,Color.Red);string artifact=CatalogPair(store,photo);
+   using(var sink=FailureApp(store,photo)){var app=sink.App;for(int n=1;n<=2;n++){app.TestShow(photo);Until(()=>sink.Sequence==n,"runtime retry missing");sink.Fail(sink.Last,NativeSpatial.LoadFailed);Check(app.TestFlat,"runtime did not flatten");}
+    int count=sink.Events.Count;app.TestShow(photo);Until(()=>sink.Events.Count>count,"third slide absent");Check(sink.Sequence==2&&sink.Events.Last()=="flat:"+photo,"runtime attempted more than twice");
+    Check(SpatialBad.Load(store).Count==0&&app.TestCatalogResult.Bad==0&&File.Exists(artifact),"runtime changed persistent content state");
+   }
+   using(var next=FailureApp(store,photo)){next.App.TestShow(photo);Until(()=>next.Last!=null,"runtime blocked next session");}
+  });
+  foreach(string stale in new[]{"host","sequence","request"})Run("T3c stale "+stale+" releases lease without affecting current slide",()=>{
+   string root=Fresh("f-stale-"+stale),store=Path.Combine(root,"store"),a=Path.Combine(root,"a.bmp"),b=Path.Combine(root,"b.bmp");Bmp(a,Color.Red);Bmp(b,Color.Blue);string artifact=CatalogPair(store,a);CatalogPair(store,b);
+   using(var entered=new System.Threading.ManualResetEventSlim())using(var release=new System.Threading.ManualResetEventSlim())using(var sink=FailureApp(store,a,b)){
+    var app=sink.App;try{app.TestShow(a);Until(()=>sink.Last!=null,"no initial scene");var old=sink.Last;
+     if(stale=="request"){app.beforeVerifyDelivery=v=>{if(v.Image.Source==a){entered.Set();release.Wait(10000);}};app.TestShow(a);Until(()=>entered.IsSet,"new request did not wait");}
+     else{var v=new SpatialVerification(old.Request,old.Image,old.Pair){Pair=old.Pair,ArtifactDigest=old.Digest};app.TestCurrentLoad=new SpatialLoad(stale=="host"?new object():old.Host,stale=="sequence"?old.Sequence+1:old.Sequence,v);}
+     int count=sink.Events.Count;var current=app.TestCurrentLoad;sink.Fail(old,NativeSpatial.LoadError);
+     Check(sink.Events.Count==count&&ReferenceEquals(app.TestCurrentLoad,current),"stale callback changed current scene");Check(sink.Released(old.Sequence),"stale callback leaked lease");if(stale!="request")Check(Writable(artifact),"stale callback retained artifact handle");Check(SpatialBad.Load(store).Count==0,"stale callback recorded failure");
+    }finally{release.Set();}
+   }
+  });
+  Run("T3c content survives restart and sidecar rewrite; different bytes at same path play immediately",()=>{
+   string root=Fresh("f-content"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.bmp");Bmp(photo,Color.Red);string artifact=CatalogPair(store,photo);byte[] original=File.ReadAllBytes(artifact);string digest=CatalogHash(original);
+   using(var sink=FailureApp(store,photo)){
+    var app=sink.App;app.TestShow(photo);Until(()=>sink.Last!=null,"no native attempt");
+    using(var held=new FileStream(artifact,FileMode.Open,FileAccess.Read,FileShare.Read)){sink.Fail(sink.Last,NativeSpatial.LoadError);Until(()=>app.rejectionWork!=null&&app.rejectionWork.IsCompleted,"content save unfinished");Check(SpatialBad.Load(store).ContainsKey(digest),"content not saved");Check(File.Exists(artifact)&&File.Exists(artifact+".json"),"held pair partly quarantined");}
+    // A metadata rewrite cannot rehabilitate the same bytes, in either this or a new session.
+    File.AppendAllText(artifact+".json","\n");app.TestLoadCatalog();Until(()=>!app.TestCatalogLoading,"catalogue did not refresh");Check(app.TestFlat&&app.TestCatalogResult.Bad==1&&app.TestNeeds()[1]==1,"same bytes counted as ready");
+    using(var next=FailureApp(store,photo)){next.App.TestShow(photo);Until(()=>next.Events.Count>0,"next session did not display");Check(next.Last==null&&next.Events.Last()=="flat:"+photo,"next session retried content");}
+    byte[] changed=(byte[])original.Clone();FormatFloat(changed,20,2);RewriteArtifact(artifact,changed);app.TestLoadCatalog();Until(()=>sink.Sequence==2,"new bytes at same path did not attach");
+    Check(!app.TestFlat&&app.TestCatalogResult.Bad==0&&SpatialBad.Load(store).ContainsKey(digest),"repair cleared old digest or stayed bad");
+   }
+  });
+  Run("T3c managed content rejection persists but metadata and read failures do not",()=>{
+   string root=Fresh("f-managed"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.bmp");Bmp(photo,Color.Red);string artifact=CatalogPair(store,photo);byte[] bad=SpatialFixture();bad[0]^=1;RewriteArtifact(artifact,bad);
+   using(var sink=FailureApp(store,photo)){sink.App.TestShow(photo);Until(()=>sink.Events.Count>0,"no managed result");Until(()=>SpatialBad.Load(store).Count==1,"managed format failure not recorded");Check(sink.Last==null&&sink.App.TestFlat,"managed invalid content attached");}
+   string other=Path.Combine(root,"other");artifact=CatalogPair(other,photo);var catalog=SpatialCatalog.Load(other,new[]{photo},null).Complete(()=>false);File.WriteAllBytes(artifact,bad);
+   using(var v=SpatialVerification.Check(1,new SlideSnapshot(photo,File.ReadAllBytes(photo)),catalog.Photos[photo].Pair))Check(v.ArtifactInvalid&&!v.ContentFailure,"hash mismatch became verified content failure");
+   using(var held=new FileStream(artifact,FileMode.Open,FileAccess.Read,FileShare.None))using(var v=SpatialVerification.Check(2,new SlideSnapshot(photo,File.ReadAllBytes(photo)),catalog.Photos[photo].Pair))Check(v.ArtifactInvalid&&!v.ContentFailure,"read failure became content failure");
+   RewriteArtifact(artifact,new byte[]{1,2,3});using(var v=SpatialVerification.Check(3,new SlideSnapshot(photo,File.ReadAllBytes(photo)),catalog.Photos[photo].Pair))Check(v.ContentFailure&&v.ArtifactDigest==CatalogHash(new byte[]{1,2,3}),"short header did not preserve verified content identity");
+  });
+  Run("T3c quarantine rechecks digest and defers held pair to next sweep",()=>{
+   string root=Fresh("f-quarantine"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.bmp");Bmp(photo,Color.Red);string artifact=CatalogPair(store,photo);var pair=SpatialCatalog.Load(store,new[]{photo},null).Complete(()=>false).Photos[photo].Pair;string digest=SpatialContent.Digest(pair);
+   SpatialBad.Save(store,new Dictionary<string,SpatialBad.Record>{{digest,SpatialBad.For(pair,photo,"jpeg")}},Path.Combine(root,"locks","store.lock"));
+   using(var held=new FileStream(artifact,FileMode.Open,FileAccess.Read,FileShare.Read)){var r=Retain(store,new[]{photo},RetentionNow);Check(r.QuarantinedThisSweep==0&&File.Exists(artifact)&&File.Exists(artifact+".json"),"held pair not deferred together");}
+   // An external rewrite after the rejection must not be moved on the strength of the stale sidecar.
+   var changed=SpatialFixture();FormatFloat(changed,20,2);File.WriteAllBytes(artifact,changed);
+   using(SpatialStoreLock.Acquire(Path.Combine(root,"locks","store.lock"),0))Check(!SpatialRetention.QuarantineBadLocked(store,pair,digest,RetentionNow),"quarantine ignored actual artifact digest");
+   RewriteArtifact(artifact,SpatialFixture());var notes=new List<string>();var swept=SpatialRetention.Sweep(store,new[]{photo},File.Delete,notes.Add,RetentionNow,null,Path.Combine(root,"locks","generator.lock"),Path.Combine(root,"locks","store.lock"));Check(swept.QuarantinedThisSweep==1&&!File.Exists(artifact)&&!File.Exists(artifact+".json"),"next sweep did not quarantine released pair: "+string.Join("; ",notes));
+   Check(Directory.GetFiles(Path.Combine(store,"v1","quarantine")).Length==2,"quarantine lost one file");var c=SpatialCatalog.Load(store,new[]{photo},SpatialIdentity.RecipeSha256(CatalogRecipe())).Complete(()=>false);Check(c.Bad==1&&c.Photos[photo].Needs,"quarantine lost repair count");
+   var app=new App(new TestWall()){TestSettings=new MatteSettings{Playlist=new List<string>{photo},SpatialFolder=store}};try{app.TestStoreView(c,swept);Check(app.TestVisible("StoreBadInfo")&&app.TestText("StoreBadInfo")=="1 张 3D 图片无法读取 · 需要重新生成","store content line missing");}finally{app.TestClose();}
+  });
+  Run("T3c corrupt cache is empty; persistence failure cannot prevent flat fallback",()=>{
+   string root=Fresh("f-cache"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.bmp");Bmp(photo,Color.Red);string artifact=CatalogPair(store,photo),path=Path.Combine(store,"v1","bad.json");File.WriteAllText(path,"{bad");Check(SpatialBad.Load(store).Count==0,"corrupt cache not empty");
+   using(var sink=FailureApp(store,photo)){sink.App.TestShow(photo);Until(()=>sink.Last!=null,"corrupt cache blocked playback");using(var held=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read)){sink.Fail(sink.Last,NativeSpatial.LoadError);Check(sink.App.TestFlat&&sink.App.TestWallpaper==sink.Last.Image.ShowPath(true,true),"failed persistence blocked fallback");Pump(200);Check(File.ReadAllText(path)=="{bad","cache unexpectedly replaced while held");}
+    int n=sink.Events.Count;sink.App.TestShow(photo);Until(()=>sink.Events.Count>n,"no flat repeat");Check(sink.Sequence==1,"save failure lost session rejection");}
+  });
+  Run("T3c managed fallback uses captured photo even if source is replaced before delivery",()=>{
+   string root=Fresh("f-snap"),store=Path.Combine(root,"store"),photo=Path.Combine(root,"a.bmp");Bmp(photo,Color.Red);byte[] source=File.ReadAllBytes(photo);string artifact=CatalogPair(store,photo);var bad=SpatialFixture();bad[0]^=1;RewriteArtifact(artifact,bad);
+   using(var sink=FailureApp(store,photo)){sink.App.beforeVerifyDelivery=v=>Bmp(photo,Color.Blue);sink.App.TestShow(photo);Until(()=>sink.Events.Count>0,"managed failure not delivered");
+    Check(File.ReadAllBytes(sink.App.TestWallpaper).SequenceEqual(source),"fallback reread changed source instead of current snapshot");Until(()=>sink.App.rejectionWork!=null&&sink.App.rejectionWork.IsCompleted,"save unfinished");}
+  });
+  Run("T3c atomic records merge and shared digest keeps both repair counts after quarantine",()=>{
+   string root=Fresh("f-merge"),store=Path.Combine(root,"s"),a=Path.Combine(root,"a.bmp"),b=Path.Combine(root,"b.bmp"),lockPath=Path.Combine(root,"locks","store.lock");Bmp(a,Color.Red);Bmp(b,Color.Blue);CatalogPair(store,a);CatalogPair(store,b);
+   var catalog=SpatialCatalog.Load(store,new[]{a,b},null).Complete(()=>false);var pair=catalog.Photos[a].Pair;string digest=SpatialContent.Digest(pair);
+   SpatialBad.Save(store,new Dictionary<string,SpatialBad.Record>{{digest,SpatialBad.For(pair,a,"jpeg")}},lockPath);
+   var records=new Dictionary<string,SpatialBad.Record>{{new string('a',64),SpatialBad.For(pair,a,"earlier")}};
+   using(SpatialStoreLock.Acquire(lockPath,0)){var task=System.Threading.Tasks.Task.Run(()=>SpatialBad.Save(store,records,lockPath));Pump(150);Check(!task.IsCompleted&&SpatialBad.Load(store).Count==1,"writer ignored store lock");}
+   Until(()=>SpatialBad.Load(store).Count==2,"record merge lost earlier hash");
+   Check(SpatialBad.Quarantine(store,null,Path.Combine(root,"locks","generator.lock"),lockPath)==2,"shared bad digest did not isolate both pairs");
+   catalog=SpatialCatalog.Load(store,new[]{a,b},null).Complete(()=>false);Check(catalog.Bad==2&&catalog.Photos.Values.All(p=>p.Pair==null&&p.Needs),"quarantine forgot a source sharing bad content");
+   Check(Directory.GetFiles(Path.Combine(store,"v1","quarantine")).Length==4,"pair quarantine incomplete");
   });
  }
  static void AttachTests(){

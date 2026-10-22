@@ -21,7 +21,7 @@ partial class App {
  void LoadSpatialCatalog(){
   int request=System.Threading.Interlocked.Increment(ref catalogRequest);catalogLoading=true;
   // Keep the last catalogue until its replacement is ready; a recount must not flatten the current slide.
-  string[] reset=resetHints.ToArray(),rejected=rejectedPairs.ToArray();
+  string[] reset=resetHints.ToArray(),recheck=artifactRechecks.ToArray();
   string store=SpatialCacheDir;string[] entries=PlaylistEntries().ToArray();
   bool installed=!CustomGenerator&&SharpInstalled,describe=panel!=null;
   var screen=System.Windows.Forms.Screen.PrimaryScreen.Bounds;var dispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;
@@ -34,19 +34,20 @@ partial class App {
     if(cancelled())return;
     var per=SpatialPhotoEntries(entries);var photos=per.SelectMany(x=>x.Item2).ToList();
     var hinted=SpatialCatalog.Load(store,photos,desired);
+    hinted.RecheckArtifacts(recheck);
     foreach(string path in reset)hinted.DropHint(path);
-    // A regenerated pair at the same path may be offered again, but only after checking its new artifact bytes.
-    var repaired=new List<string>();foreach(string path in rejected){if(cancelled())return;SpatialIdentity.Pair pair;if(SpatialIdentity.Classify(path+".json",true,out pair)==SpatialIdentity.Classification.Valid)repaired.Add(path);}
     var work=hinted.CopyForHash();
     // Existing playback keeps the previous catalogue until hashing finishes, even if the index was lost.
     post(()=>{if(!cancelled()&&spatialCatalog==null)ApplySpatialCatalog(hinted,per,false);});
     var complete=work.Complete(cancelled);
-    post(()=>{if(!cancelled()){foreach(string path in repaired)rejectedPairs.Remove(path);ApplySpatialCatalog(complete,per,true);}});
+    complete.RecheckArtifacts(recheck);
+    post(()=>{if(!cancelled()){ApplySpatialCatalog(complete,per,true);}});
    }catch(Exception e){Log("Spatial catalog: "+e.Message);post(()=>{if(!cancelled())catalogLoading=false;});}
   }});
  }
  void ApplySpatialCatalog(SpatialCatalog catalog,List<Tuple<string,List<string>>> per,bool complete){
-  catalog.SuppressPairs(rejectedPairs);
+  catalog.SuppressPairs(rejections.Content.Keys);
+  if(complete)verificationRefresh=false;
   if(complete)foreach(var p in catalog.Photos)if(p.Value.Status==SpatialCatalog.State.Hinted)resetHints.Remove(p.Key);
   catalogEntries=per;spatialCatalog=catalog;catalogLoading=!complete;spatialFiles.Clear();spatialSlides.Clear();
   foreach(var kv in catalog.Photos)if(kv.Value.Status==SpatialCatalog.State.Hinted&&kv.Value.Pair!=null){spatialSlides.Add(kv.Key);spatialFiles[kv.Key]=kv.Value.Pair.Artifact;}

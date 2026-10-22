@@ -98,6 +98,7 @@ static class SpatialRetention {
    using(var marker=new FileStream(reset,FileMode.Create,FileAccess.Write,FileShare.None)){marker.WriteByte(1);marker.Flush(true);}
    Save(store,history);File.Delete(reset);
   }catch(OperationCanceledException){throw;}catch(Exception ex){Note(log,ex);result.Complete=false;result.Unknown++;return result;}
+  result.QuarantinedThisSweep+=SpatialBad.QuarantineLocked(store,now,log);
   var entries=Inventory(store,io,result,log);var valid=entries.Where(e=>e.State==SpatialIdentity.Classification.Valid).ToList();
   foreach(var e in valid)if(!history.pairs.ContainsKey(e.Key))history.pairs[e.Key]=new Record{sourceSha=e.Source,recipeSha=e.Recipe};
   var photos=Photos(roots,history,io,result,log);var matches=new Dictionary<string,List<string>>(StringComparer.Ordinal);
@@ -141,6 +142,17 @@ static class SpatialRetention {
    if(Exists(artifact)){recycle(artifact);if(Exists(artifact))return false;}
    if(Exists(sidecar)){recycle(sidecar);if(Exists(sidecar))return false;}return true;
   }catch(OperationCanceledException){throw;}catch(Exception ex){Note(log,ex);return false;}}
+ internal static bool QuarantineBadLocked(string store,SpatialIdentity.Pair pair,string digest,DateTime now){
+  string side=pair.Artifact+".json";if(Link(Path.Combine(store,"v1"))||Link(Path.GetDirectoryName(side))||Link(pair.Artifact)||Link(side))return false;
+  // Keep both files immutable through the moves. FileShare.Delete allows our rename, while a player's
+  // read-only lease still prevents it. A failed second move rolls the first back using the existing protocol.
+  using(var json=new FileStream(side,FileMode.Open,FileAccess.Read,FileShare.Read|FileShare.Delete))
+  using(var artifact=new FileStream(pair.Artifact,FileMode.Open,FileAccess.Read,FileShare.Read|FileShare.Delete)){
+   SpatialIdentity.Pair current;if(SpatialIdentity.Classify(side,false,out current)!=SpatialIdentity.Classification.Valid||SpatialContent.Read(current)!=digest)return false;
+   if(artifact.Length>SpatialFormat.MaxFileBytes||SlideSnapshot.Hash(artifact)!=digest)return false;
+   Quarantine(store,new Entry{Source=current.SourceSha,Recipe=current.RecipeSha,Artifact=current.Artifact,Sidecar=side},now);return true;
+  }
+ }
  static void Quarantine(string store,Entry e,DateTime now){string dest=null,json=null;string folder=Path.Combine(store,"v1","quarantine");if(Link(folder))throw new IOException("quarantine is a link");Directory.CreateDirectory(folder);
   for(int n=0;n<86400;n++){string candidate=SpatialIdentity.QuarantinePath(store,e.Source,e.Recipe,now.AddSeconds(n));string side=Path.ChangeExtension(candidate,".json");if(!Exists(candidate)&&!Exists(side)){dest=candidate;json=side;break;}}
   if(dest==null)throw new IOException("quarantine names exhausted");bool moved=false;

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
+using System.Linq;
+using System.Text;
 
 // The Spatial layer on the desktop, parented under Progman/WorkerW like DesktopBlend. SpatialNative.dll draws it with
 // Direct3D 11: it reads the .spatial file, the cursor and the frame clock itself, and does its own fades (from and to a
@@ -10,6 +12,8 @@ using System.Runtime.InteropServices;
 sealed class SpatialDesktopHost : Form {
  readonly NativeSpatial renderer;
  readonly SpatialLeases leases=new SpatialLeases();
+ readonly Dictionary<int,SpatialLoad> loads=new Dictionary<int,SpatialLoad>();
+ readonly Action<SpatialLoad> attached;readonly Action<SpatialLoad,int,NativeSpatial.FailureReason,string> failed;
  IntPtr host,icons; bool layered; bool ready;
  [DllImport("user32.dll")] static extern IntPtr SetParent(IntPtr h,IntPtr p);
  [DllImport("user32.dll")] static extern bool SetLayeredWindowAttributes(IntPtr h,uint key,byte alpha,uint flags);
@@ -23,7 +27,8 @@ sealed class SpatialDesktopHost : Form {
  internal bool Ready{get{return ready;}}
  // still: what the desktop shows now (DesktopBlend.Compose, the window's size): shown first, the first scene fades in
  // over it in stillFadeMs; backdrop: the ambient / extended background behind the scene, or null for the colour.
- internal SpatialDesktopHost(SpatialVerification verified,Rectangle bounds,Color color,Bitmap still,Bitmap backdrop,int stillFadeMs=700){
+ internal SpatialDesktopHost(SpatialVerification verified,Rectangle bounds,Color color,Bitmap still,Bitmap backdrop,Action<SpatialLoad> attached,Action<SpatialLoad,int,NativeSpatial.FailureReason,string> failed,int stillFadeMs=700){
+  this.attached=attached;this.failed=failed;
   host=DesktopBlend.DesktopHost(out icons,out layered);if(host==IntPtr.Zero)throw new InvalidOperationException("Desktop host unavailable");
   FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;AutoScaleMode=AutoScaleMode.None;ClientSize=bounds.Size;BackColor=Color.Black;
   SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.Opaque,true);   // the swap chain is the only content
@@ -39,7 +44,7 @@ sealed class SpatialDesktopHost : Form {
   try{Show();SetWindowPos(h,icons,0,0,0,0,0x10|0x01|0x02);ready=true;Navigate(verified,color,backdrop);}catch{Dispose();throw;}
  }
  internal void Navigate(SpatialVerification verified,Color color,Bitmap backdrop){var lease=verified.TakeSceneLease();if(lease==null||verified.Pair==null){if(lease!=null)lease.Dispose();throw new InvalidOperationException("Spatial requires a verified lease");}
-  try{renderer.SetBackdrop(backdrop);int sequence=renderer.Show(verified.Pair.Artifact,color);leases.Add(sequence,lease);}catch{lease.Dispose();throw;}}
+  try{renderer.SetBackdrop(backdrop);int sequence=renderer.Show(verified.Pair.Artifact,color);leases.Add(sequence,lease);var load=new SpatialLoad(this,sequence,verified);loads.Add(sequence,load);attached(load);}catch{lease.Dispose();throw;}}
  internal void SetColor(Color color){renderer.SetColor(color);}
  // How the camera moves (App.MotionCode): 0 follow the cursor, 1 the opposite way, 2 circle, 3 handheld.
  internal void SetMotion(int mode){renderer.SetMotion(mode);}
@@ -52,11 +57,15 @@ sealed class SpatialDesktopHost : Form {
  void FadeFinished(){if(fadeTimer!=null){fadeTimer.Stop();fadeTimer.Dispose();fadeTimer=null;}var d=fadeDone;fadeDone=null;if(d!=null)d();}
  // Renderer thread: handed to the UI thread.
  void OnNativeEvent(int kind,int sequence){
+  // SnLastError is renderer-owned history: copy it before dispatch, including for a superseded host.
+  var reason=NativeSpatial.FailureReason.None;string detail=null;bool error=kind==NativeSpatial.LoadError||kind==NativeSpatial.LoadFailed;
+  if(error){var text=new StringBuilder(512);renderer.LastError(sequence,out reason,text);detail=text.ToString();}
   if(IsDisposed||!IsHandleCreated)return;
   try{BeginInvoke((Action)delegate{
    if(IsDisposed)return;leases.NativeEvent(kind,sequence);
+   if(kind==NativeSpatial.TransitionDone)foreach(int n in loads.Keys.Where(n=>n<sequence).ToArray())loads.Remove(n);
    if(kind==NativeSpatial.FadeOutDone)FadeFinished();
-   else if(kind==NativeSpatial.LoadError){App.Log("Spatial native: a .spatial file could not be loaded");}});}catch{}
+   else if(error){SpatialLoad load;if(loads.TryGetValue(sequence,out load)){loads.Remove(sequence);failed(load,kind,reason,detail);}}});}catch{}
  }
  internal NativeSpatial.Stats NativeStats{get{return renderer.GetStats();}}
  // The desktop cannot be seen (SpatialPower.cs): the pointer stops driving redraws (slide changes and fades still draw).
@@ -100,24 +109,24 @@ partial class App {
    string before=wall.GetWallpaper(wall.GetMonitorDevicePathAt(0));uint beforeColor=wall.GetBackgroundColor();
    int inMs=string.Equals(before,path,StringComparison.OrdinalIgnoreCase)?700:1600;
    using(var still=DesktopBlend.Compose(before,Unpack(beforeColor),SystemInformation.VirtualScreen,Screen.AllScreens)){
-    spatialDesktop=new SpatialDesktopHost(verified,SystemInformation.VirtualScreen,Unpack(color),still,backdrop,inMs);}
+    spatialDesktop=new SpatialDesktopHost(verified,SystemInformation.VirtualScreen,Unpack(color),still,backdrop,l=>spatialLoad=l,SpatialLoadFailed,inMs);}
    spatialDesktop.SetMotion(MotionCode);if(spatialPaused)spatialDesktop.SetPaused(true);
    SetUnderneath(path,color);
   }
   blendPath=path;last=Key(path);return true;}
-  catch(Exception e){Log("Spatial wallpaper failed: "+e.Message);CloseSpatial();wall.SetBackgroundColor(color);wall.SetWallpaper(null,path);last=Key(path);return false;}
+  catch(Exception e){Log("Spatial wallpaper failed: "+e.Message);verified.Dispose();FlatSpatialFailure(verified.Image);RejectSpatial(verified.Pair,verified.ArtifactDigest,false,verified.Image.Source,e.Message);return false;}
   finally{if(backdrop!=null)backdrop.Dispose();}}   // the renderer keeps its own copy
  // Layers still fading out after an animated close. A close without animation (e.g. quitting) takes these too,
  // so no scene outlives it.
  readonly List<SpatialDesktopHost> closingSpatial=new List<SpatialDesktopHost>();
  void CloseSpatial(){CancelSlideRequests();CloseSpatial(false);}
  // animate: the renderer fades to the photo that is the Windows wallpaper underneath, then the layer goes.
- void CloseSpatial(bool animate){CancelUnderneath();
+ void CloseSpatial(bool animate,int duration=700){CancelUnderneath();spatialLoad=null;
   if(!animate)foreach(var c in closingSpatial.ToArray()){closingSpatial.Remove(c);try{c.Close();c.Dispose();}catch(Exception e){Log("Spatial close: "+e.Message);}}
   if(spatialDesktop==null)return;var d=spatialDesktop;spatialDesktop=null;
   Action close=()=>{if(closingSpatial.Remove(d)||!animate){d.Close();d.Dispose();}};
   if(!animate){close();return;}
   closingSpatial.Add(d);
-  try{using(var still=DesktopBlend.Compose(wall.GetWallpaper(wall.GetMonitorDevicePathAt(0)),Unpack(wall.GetBackgroundColor()),SystemInformation.VirtualScreen,Screen.AllScreens))d.FadeOut(still,700,close);}
+  try{using(var still=DesktopBlend.Compose(wall.GetWallpaper(wall.GetMonitorDevicePathAt(0)),Unpack(wall.GetBackgroundColor()),SystemInformation.VirtualScreen,Screen.AllScreens))d.FadeOut(still,duration,close);}
   catch(Exception e){Log("Spatial close: "+e.Message);close();}}
 }

@@ -67,7 +67,37 @@ def destination_state(sidecar):
 
 
 def needs(store, source_sha, recipe_sha):
-    return identity.classify(identity.sidecar_path(store, source_sha, recipe_sha), verify_artifact=True) != 'Valid'
+    sidecar = identity.sidecar_path(store, source_sha, recipe_sha)
+    return identity.classify(sidecar, verify_artifact=True) != 'Valid' or rejected_pair(store, sidecar)
+
+
+def bad_records(store):
+    # Local, rebuildable cache. A missing, corrupt or temporarily unreadable cache is empty.
+    try:
+        data = identity.parse_strict((Path(store) / 'v1' / 'bad.json').read_text(encoding='utf-8'))
+        records = data['artifacts']
+        def sha(value):
+            return isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+        if type(data['version']) is not int or data['version'] != 1 or not isinstance(records, dict):
+            return {}
+        for digest, record in records.items():
+            if not sha(digest) or not isinstance(record, dict) or not sha(record.get('sourceSha')) or not sha(record.get('recipeSha')):
+                return {}
+            aliases = record.get('aliases')
+            if aliases is not None and (not isinstance(aliases, list) or any(
+                    not isinstance(key, str) or len(key.split('/')) != 2 or
+                    not all(sha(part) for part in key.split('/')) for key in aliases)):
+                return {}
+        return records
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError):
+        return {}
+
+
+def rejected_pair(store, sidecar):
+    # The caller classified the pair, including its artifact hash. Sidecar changes are I/O failures,
+    # not permission to overwrite it. Publication calls this again while holding store.lock.
+    metadata = identity.parse_strict(Path(sidecar).read_text(encoding='utf-8'))
+    return metadata['artifact']['sha256'] in bad_records(store)
 
 
 def cleanup_temps(store):
@@ -126,7 +156,7 @@ def publish_one(photo, store, fields, lock_path, make, timeout=30, hook=None):
     with StoreLock(lock_path, timeout):
         state = destination_state(sidecar)
         _check_state(state)
-        if state == 'Valid':
+        if state == 'Valid' and not rejected_pair(store, sidecar):
             return
     artifact.parent.mkdir(parents=True, exist_ok=True)
     temp = Path(identity.temp_name(artifact))
@@ -141,10 +171,9 @@ def publish_one(photo, store, fields, lock_path, make, timeout=30, hook=None):
         with StoreLock(lock_path, timeout):
             state = destination_state(sidecar)
             _check_state(state)
-            if state == 'Valid':
+            if state == 'Valid' and not rejected_pair(store, sidecar):
                 return
             try:
-                _quarantine(store, source_sha, recipe_sha, artifact, sidecar, moved)
                 reservation.flush()
                 os.fsync(reservation.fileno())
                 reservation.seek(0)
@@ -152,6 +181,11 @@ def publish_one(photo, store, fields, lock_path, make, timeout=30, hook=None):
                 for chunk in iter(lambda: reservation.read(1024 * 1024), b''):
                     digest.update(chunk)
                 size = os.fstat(reservation.fileno()).st_size
+                if digest.hexdigest() in bad_records(store):
+                    raise ValueError('regenerated file is still unreadable')
+                # Classification/hash and rejection were rechecked under this same lock. Move both
+                # old files before publishing; an open playback lease defers the entire repair.
+                _quarantine(store, source_sha, recipe_sha, artifact, sidecar, moved)
                 reservation.close()
                 rename_new(temp, artifact)
                 installed.append(artifact)
