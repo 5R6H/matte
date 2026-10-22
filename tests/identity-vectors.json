@@ -1,0 +1,811 @@
+{
+  "provenance": "Expected canonical strings were hand-written from the frozen JSON rules (including all U+0000..001F escapes and Unicode code-point key order). Recipe strings use an explicit field-by-field literal layout. Expected UTF-8 SHA-256 values were computed separately with Node.js crypto.createHash, without importing SpatialIdentity.cs or identity.py. Sidecar fixtures were assembled with Node JSON.stringify and independently assigned expected classifications; no classification code under test generated the oracle.",
+  "canonical": [
+    {
+      "name": "plain",
+      "json": "{ \"z\":2,\"a\":1 }",
+      "expected": "{\"a\":1,\"z\":2}",
+      "sha256": "99168216144c7fed5d4c54916cf98d9c66096280c04a499822a99b6658bd177a"
+    },
+    {
+      "name": "case-sensitive-key-order",
+      "json": "{\"a\":1,\"Z\":2,\"A\":3,\"z\":4}",
+      "expected": "{\"A\":3,\"Z\":2,\"a\":1,\"z\":4}",
+      "sha256": "2681e235bd257683adf53ec4cf8e88eeca2ce1730ab3687292ee81a1984b35ca"
+    },
+    {
+      "name": "nested",
+      "json": "{\"z\":[3,{\"b\":2,\"a\":1}],\"a\":-12}",
+      "expected": "{\"a\":-12,\"z\":[3,{\"a\":1,\"b\":2}]}",
+      "sha256": "24a051b894b70d1206a822539448907873dc626f00d15be45e42806b1ad3203b"
+    },
+    {
+      "name": "bmp",
+      "json": "\"中文é \"",
+      "expected": "\"\\u4e2d\\u6587\\u00e9\\u007f\\u2028\"",
+      "sha256": "648f730f90ec179e9f45729a8f61c5dcb7b4fcd7b93b32b68e864486841dbb8e"
+    },
+    {
+      "name": "astral",
+      "json": "\"😀\"",
+      "expected": "\"\\ud83d\\ude00\"",
+      "sha256": "e30439cb87e140c0b998ad3095285abfec0294e2a8916f9a8f30d85734e6f82b"
+    },
+    {
+      "name": "code-point-key-order",
+      "json": "{\"𐀀\":1,\"\":2}",
+      "expected": "{\"\\ue000\":2,\"\\ud800\\udc00\":1}",
+      "sha256": "e435664447ae90b0ae08eea493d3808d1143a0a0894ea1df55f14a290519725e"
+    },
+    {
+      "name": "controls",
+      "json": "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\"",
+      "expected": "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\"",
+      "sha256": "f144bcffbdbaea0a670956fb0a3edd44ce6bc4dedc77c30cfc14f40034044739"
+    },
+    {
+      "name": "quotes-slashes",
+      "json": "\"quote: \\\" slash: \\\\ /\"",
+      "expected": "\"quote: \\\" slash: \\\\ /\"",
+      "sha256": "ace28e70133136291c39f37452cb13d7c834ba29c8e9e2cf4c4773a8b16a66ee"
+    },
+    {
+      "name": "empty-string",
+      "json": "\"\"",
+      "expected": "\"\"",
+      "sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126"
+    },
+    {
+      "name": "empty-array",
+      "json": "[]",
+      "expected": "[]",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "name": "empty-object",
+      "json": "{}",
+      "expected": "{}",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "negative-zero",
+      "json": "-0",
+      "expected": "0",
+      "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "name": "large-integer",
+      "json": "1234567890123456789012345678901234567890",
+      "expected": "1234567890123456789012345678901234567890",
+      "sha256": "a4ebdd541454b84cc670c9f1f5508baf67ffd3fe59b883267808781f992a0b1d"
+    },
+    {
+      "name": "escaped-key",
+      "json": "{\"\\u0061\":1}",
+      "expected": "{\"a\":1}",
+      "sha256": "015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862"
+    }
+  ],
+  "recipes": [
+    {
+      "name": "v1",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "expected": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "sha256": "4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3",
+      "outcome": "Valid",
+      "supported": 1
+    },
+    {
+      "name": "unknown-generator",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/2\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "expected": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/2\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "sha256": "9dba4f5d79dcf72ed1a17315c8e0d56cbea03b1d419db66c32b49c82a83c3931",
+      "outcome": "Valid",
+      "supported": 0
+    },
+    {
+      "name": "unknown-exporter",
+      "json": "{\"exporter\":\"spatial-photos/2\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "expected": "{\"exporter\":\"spatial-photos/2\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "sha256": "30b54a829675eb7815946eaad3f607ec56417c3031e4d7a775b75ea2cc63b466",
+      "outcome": "Valid",
+      "supported": 0
+    },
+    {
+      "name": "lower-bound",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":64,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":64}",
+      "expected": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":64,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":64}",
+      "sha256": "e65a6e444332d45d0d127446357b91d76c68b79b517e1fe2e3ee47f0c0884cdb",
+      "outcome": "Valid",
+      "supported": 1
+    },
+    {
+      "name": "upper-bound",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":16384,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":16384}",
+      "expected": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":16384,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":16384}",
+      "sha256": "fef14c534c8fd2ae95354ea5dc182de3abe4b0b89acfe0a242cba259d5c7ee62",
+      "outcome": "Valid",
+      "supported": 1
+    },
+    {
+      "name": "boolean-width",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":true}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "boolean-height",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":false,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "fraction-width",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":64.5}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "small-width",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":63}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "large-height",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":16385,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "string-width",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":\"2560\"}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "null-model",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":null,\"upright\":\"exif-v1\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "upper-digest",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "short-digest",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"abc\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "bad-upright",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v2\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "bad-exporter",
+      "json": "{\"exporter\":\"spatial-photos/01\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "bad-generator",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/x\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "extra",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560,\"extra\":1}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "missing-exporter",
+      "json": "{\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "missing-generator",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "missing-height",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "missing-model",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"upright\":\"exif-v1\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "missing-upright",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"width\":2560}",
+      "outcome": "Invalid"
+    },
+    {
+      "name": "missing-width",
+      "json": "{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\"}",
+      "outcome": "Invalid"
+    }
+  ],
+  "sidecars": [
+    {
+      "name": "valid",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Valid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "skip-artifact-hash",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Valid",
+      "verify": 0,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "recipe-sha-mismatch",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":1280}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "unknown-version",
+      "json": "{\"version\":2,\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\",\"future\":{\"nullable\":null,\"flag\":true}}",
+      "expected": "Unsupported",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "negative-version",
+      "json": "{\"version\":-1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Unsupported",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "huge-version",
+      "json": "{\"version\":999999999999999999999999999999}",
+      "expected": "Unsupported",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "boolean-version",
+      "json": "{\"version\":true,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "unsupported-recipe",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"9dba4f5d79dcf72ed1a17315c8e0d56cbea03b1d419db66c32b49c82a83c3931\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/2\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"9dba4f5d79dcf72ed1a17315c8e0d56cbea03b1d419db66c32b49c82a83c3931.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "digest-mismatch",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "size-mismatch",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":12},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "boolean-size",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":true,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "negative-size",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":-1,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "oversized-size",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":9223372036854775808,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "uppercase-source-digest",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"BF8A38DEC26E6C651CB587F09DD7FBE694347C3B3E7C7AFFB79CED3566DCD25D\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "invalid-created",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-02-30T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "offset-created",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00+00:00\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "fraction-created",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00.000Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "string-size",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":\"12\",\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "null-name",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":null,\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "array-path",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":[]},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "unsafe-file-20",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"../escape.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "unsafe-file-21",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"..\\\\escape.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "unsafe-file-22",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"C:\\\\escape.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "unsafe-file-23",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"/escape.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "unsafe-file-24",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial:ads\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "wrong-source",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "wrong-source"
+    },
+    {
+      "name": "wrong-recipe",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "wrong-recipe"
+    },
+    {
+      "name": "wrong-version-dir",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "wrong-version-dir"
+    },
+    {
+      "name": "uppercase-source",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "uppercase-source"
+    },
+    {
+      "name": "uppercase-recipe",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "uppercase-recipe"
+    },
+    {
+      "name": "missing-artifact",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "missing-artifact",
+      "location": "normal"
+    },
+    {
+      "name": "missing-sidecar",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Unreadable",
+      "verify": 1,
+      "mode": "missing-sidecar",
+      "location": "normal"
+    },
+    {
+      "name": "locked-artifact",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Unreadable",
+      "verify": 1,
+      "mode": "locked-artifact",
+      "location": "normal"
+    },
+    {
+      "name": "locked-sidecar",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Unreadable",
+      "verify": 1,
+      "mode": "locked-sidecar",
+      "location": "normal"
+    },
+    {
+      "name": "bad-utf8",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "bad-utf8",
+      "location": "normal"
+    },
+    {
+      "name": "extra-root",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\",\"extra\":1}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-root-version",
+      "json": "{\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-root-source",
+      "json": "{\"version\":1,\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-root-recipe",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-root-artifact",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-root-created",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11}}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "extra-source",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\",\"extra\":1},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-source-sha256",
+      "json": "{\"version\":1,\"source\":{\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-source-size",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-source-name",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-source-path",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "extra-recipe",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560},\"extra\":1},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-recipe-sha256",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-recipe-fields",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\"},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "extra-artifact",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11,\"extra\":1},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-artifact-file",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-artifact-sha256",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"size\":11},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "missing-artifact-size",
+      "json": "{\"version\":1,\"source\":{\"sha256\":\"bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d\",\"size\":12,\"name\":\"photo.jpg\",\"path\":\"C:\\\\photos\\\\photo.jpg\"},\"recipe\":{\"sha256\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3\",\"fields\":{\"exporter\":\"spatial-photos/1\",\"generator\":\"matte-sharp/1\",\"height\":1600,\"model\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"upright\":\"exif-v1\",\"width\":2560}},\"artifact\":{\"file\":\"4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3.spatial\",\"sha256\":\"d25252040204953b4a9926344bf5de38d5bbd36d01e71eb25b4c68a535f99248\"},\"created\":\"2026-10-22T12:00:00Z\"}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "malformed",
+      "json": "{",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "duplicate-version",
+      "json": "{\"version\":2,\"version\":1}",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    },
+    {
+      "name": "not-object",
+      "json": "[]",
+      "expected": "Invalid",
+      "verify": 1,
+      "mode": "normal",
+      "location": "normal"
+    }
+  ],
+  "parseRejects": [
+    {
+      "name": "duplicate-key",
+      "json": "{\"a\":1,\"a\":2}"
+    },
+    {
+      "name": "escaped-duplicate",
+      "json": "{\"a\":1,\"\\u0061\":2}"
+    },
+    {
+      "name": "nested-duplicate",
+      "json": "{\"outer\":{\"a\":1,\"a\":2}}"
+    },
+    {
+      "name": "trailing-data",
+      "json": "{} {}"
+    },
+    {
+      "name": "fraction",
+      "json": "1.0"
+    },
+    {
+      "name": "exponent",
+      "json": "1e3"
+    },
+    {
+      "name": "negative-exponent",
+      "json": "-1E-3"
+    },
+    {
+      "name": "leading-zero",
+      "json": "01"
+    },
+    {
+      "name": "negative-leading-zero",
+      "json": "-01"
+    },
+    {
+      "name": "plus-number",
+      "json": "+1"
+    },
+    {
+      "name": "NaN",
+      "json": "NaN"
+    },
+    {
+      "name": "Infinity",
+      "json": "Infinity"
+    },
+    {
+      "name": "high-surrogate",
+      "json": "\"\\ud800\""
+    },
+    {
+      "name": "low-surrogate",
+      "json": "\"\\udc00\""
+    },
+    {
+      "name": "bad-pair",
+      "json": "\"\\ud800\\ud800\""
+    },
+    {
+      "name": "surrogate-key",
+      "json": "{\"\\ud800\":1}"
+    },
+    {
+      "name": "trailing-comma",
+      "json": "[1,]"
+    },
+    {
+      "name": "object-trailing-comma",
+      "json": "{\"a\":1,}"
+    },
+    {
+      "name": "bad-escape",
+      "json": "\"\\x20\""
+    },
+    {
+      "name": "short-escape",
+      "json": "\"\\u123\""
+    },
+    {
+      "name": "bad-hex",
+      "json": "\"\\uZZZZ\""
+    },
+    {
+      "name": "raw-control",
+      "json": "\"\n\""
+    },
+    {
+      "name": "missing-value",
+      "json": "{\"a\":}"
+    },
+    {
+      "name": "unterminated",
+      "json": "\"abc"
+    },
+    {
+      "name": "empty",
+      "json": ""
+    },
+    {
+      "name": "bom",
+      "json": "﻿{}"
+    }
+  ],
+  "canonicalRejects": [
+    {
+      "name": "unsupported-value-0",
+      "json": "true"
+    },
+    {
+      "name": "unsupported-value-1",
+      "json": "false"
+    },
+    {
+      "name": "unsupported-value-2",
+      "json": "null"
+    },
+    {
+      "name": "unsupported-value-3",
+      "json": "[null]"
+    },
+    {
+      "name": "unsupported-value-4",
+      "json": "{\"width\":true}"
+    },
+    {
+      "name": "unsupported-value-5",
+      "json": "{\"a\":false}"
+    }
+  ],
+  "sourceSha": "bf8a38dec26e6c651cb587f09dd7fbe694347c3b3e7c7affb79ced3566dcd25d",
+  "recipeSha": "4a178894060828cf6cb44766229dfa100efebb7b3fb28360a5564c2ed95c98d3",
+  "artifactText": "artifact-v1"
+}

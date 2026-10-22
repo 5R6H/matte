@@ -80,7 +80,8 @@ static class MatteTests {
  static string SettingsFile{get{return Path.Combine(Here,"settings.json");}}
  static void ClearSettings(){foreach(var x in new[]{"",".bak",".bad",".tmp"})if(File.Exists(SettingsFile+x))File.Delete(SettingsFile+x);}
 
- [STAThread] static int Main(){
+ [STAThread] static int Main(string[] args){
+  IdentityTests();if(args.Contains("--identity"))return failures;
   // ② the store page's sweep runs once, not again and again
   Run("2 store page sweeps once",()=>{
    string photos=Fresh("store-photos");for(int i=0;i<3;i++)Solid(Path.Combine(photos,"p"+i+".jpg"),Color.FromArgb(40*i,90,140),64,48,1);
@@ -527,6 +528,82 @@ exit 0
   b.Save(path,jpeg,q);
  }
  static bool Near(uint a,uint b,int tol){for(int k=0;k<3;k++){int x=(int)((a>>(8*k))&255),y=(int)((b>>(8*k))&255);if(Math.Abs(x-y)>tol)return false;}return true;}
+ static Dictionary<string,object> IdObj(object value){return (Dictionary<string,object>)value;}
+ static IEnumerable<Dictionary<string,object>> IdCases(Dictionary<string,object> vectors,string key){return ((List<object>)vectors[key]).Select(IdObj);}
+ static void IdReject(Action action,string message){try{action();}catch(FormatException){return;}throw new Exception(message);}
+ static void IdentityTests(){
+  var v=IdObj(SpatialIdentity.ParseStrict(File.ReadAllText(Path.Combine(Here,"..","identity-vectors.json"),System.Text.Encoding.UTF8)));
+  foreach(var item in IdCases(v,"canonical")){var c=item;Run("T2a canonical "+c["name"],()=>{
+   string actual=SpatialIdentity.Canonical(SpatialIdentity.ParseStrict((string)c["json"]));
+   Check(actual==(string)c["expected"],"canonical differs: "+actual);
+   Check(SpatialIdentity.Sha256(System.Text.Encoding.UTF8.GetBytes(actual))==(string)c["sha256"],"canonical SHA-256 differs");
+  });}
+  foreach(var item in IdCases(v,"parseRejects")){var c=item;Run("T2a parser "+c["name"],()=>IdReject(()=>SpatialIdentity.ParseStrict((string)c["json"]),"parser accepted "+c["name"]));}
+  foreach(var item in IdCases(v,"canonicalRejects")){var c=item;Run("T2a canonical rejects "+c["name"],()=>IdReject(()=>SpatialIdentity.Canonical(SpatialIdentity.ParseStrict((string)c["json"])),"canonical accepted "+c["json"]));}
+  Run("T2a native value types and raw surrogates",()=>{
+   foreach(object bad in new object[]{1.5,1.0m,true,null,"\ud800","\udc00",new Dictionary<string,object>{{"a",1.0}}})IdReject(()=>SpatialIdentity.Canonical(bad),"accepted unsupported native value");
+   IdReject(()=>SpatialIdentity.ParseStrict("\"\ud800\""),"accepted raw surrogate");
+   Check(SpatialIdentity.Canonical(new object[]{long.MinValue,ulong.MaxValue})=="[-9223372036854775808,18446744073709551615]","native integer bounds");
+  });
+  foreach(var item in IdCases(v,"recipes")){var c=item;Run("T2a recipe "+c["name"],()=>{
+   if((string)c["outcome"]=="Invalid")IdReject(()=>SpatialIdentity.ValidateRecipe(SpatialIdentity.ParseStrict((string)c["json"])),"accepted invalid recipe "+c["name"]);
+   else{object fields=SpatialIdentity.ParseStrict((string)c["json"]);
+    Check(SpatialIdentity.Canonical(fields)==(string)c["expected"],"recipe canonical differs");
+    Check(SpatialIdentity.RecipeSha256(fields)==(string)c["sha256"],"recipe SHA-256 differs");
+    Check(SpatialIdentity.Supported(fields)==(c["supported"].ToString()=="1"),"supported recipe differs");}
+  });}
+  var valid=new List<SpatialIdentity.Pair>();
+  foreach(var item in IdCases(v,"sidecars")){var c=item;Run("T2a sidecar "+c["name"],()=>{
+   string store=Fresh("id"),source=(string)v["sourceSha"],recipe=(string)v["recipeSha"],location=(string)c["location"],mode=(string)c["mode"];
+   if(location=="wrong-source")source=new string('0',64);if(location=="wrong-recipe")recipe=new string('0',64);
+   string folder=Path.Combine(store,location=="wrong-version-dir"?"v2":"v1",location=="uppercase-source"?source.ToUpperInvariant():source);Directory.CreateDirectory(folder);
+   string artifact=Path.Combine(folder,(location=="uppercase-recipe"?recipe.ToUpperInvariant():recipe)+".spatial"),sidecar=artifact+".json";
+   if(mode!="missing-artifact")File.WriteAllBytes(artifact,System.Text.Encoding.UTF8.GetBytes((string)v["artifactText"]));
+   if(mode!="missing-sidecar")File.WriteAllBytes(sidecar,mode=="bad-utf8"?new byte[]{255}:System.Text.Encoding.UTF8.GetBytes((string)c["json"]));
+   FileStream held=null;
+   try{
+    if(mode=="locked-sidecar"||mode=="locked-artifact")held=new FileStream(mode=="locked-sidecar"?sidecar:artifact,FileMode.Open,FileAccess.Read,FileShare.None);
+    SpatialIdentity.Pair pair;var result=SpatialIdentity.Classify(sidecar,c["verify"].ToString()=="1",out pair);
+    Check(result.ToString()==(string)c["expected"],"expected "+c["expected"]+", got "+result);
+    if(result==SpatialIdentity.Classification.Valid){Check(pair!=null,"missing pair");valid.Add(pair);object data=SpatialIdentity.ParseStrict((string)c["json"]);Check(SpatialIdentity.SidecarJson(data)==SpatialIdentity.Canonical(data),"sidecar write not canonical");}
+    else Check(pair==null,"invalid classification returned a pair");
+   }finally{if(held!=null)held.Dispose();}
+  });}
+  Run("T2a naming and length boundaries",()=>{
+   string store=Path.Combine(Here,"store"),source=(string)v["sourceSha"],recipe=(string)v["recipeSha"],artifact=SpatialIdentity.ArtifactPath(store,source,recipe);
+   Check(artifact==Path.Combine(store,"v1",source,recipe+".spatial"),"artifact path");Check(SpatialIdentity.SidecarPath(store,source,recipe)==artifact+".json","sidecar path");
+   var names=new HashSet<string>();for(int i=0;i<32;i++){string tmp=SpatialIdentity.TempName(artifact);Check(System.Text.RegularExpressions.Regex.IsMatch(tmp,"\\A"+System.Text.RegularExpressions.Regex.Escape(artifact)+@"\.tmp-[0-9a-f]{16}\z"),"temporary name");Check(names.Add(tmp),"repeated random temporary name");}
+   var now=new DateTime(2026,10,22,1,2,3,DateTimeKind.Utc);
+   Check(SpatialIdentity.QuarantinePath(store,source,recipe,now)==Path.Combine(store,"v1","quarantine","20261022T010203Z-"+source+"-"+recipe+".spatial"),"quarantine path");
+   string root=Path.GetPathRoot(Here);
+   foreach(int length in new[]{258,259,260})foreach(string prefix in new[]{"","\ud83d\ude00"}){
+    string path=root+prefix+new string('s',length-169-root.Length-prefix.Length);
+    Check(SpatialIdentity.StoreTooLong(path)==(length>259),"length boundary "+length+" prefix "+prefix.Length);}
+   Check(SpatialIdentity.StoreTooLong(root+new string('s',400)),"overlong store path threw or passed");
+   IdReject(()=>SpatialIdentity.ArtifactPath(store,source.ToUpperInvariant(),recipe),"accepted uppercase digest");
+   IdReject(()=>SpatialIdentity.QuarantinePath(store,source,recipe,DateTime.Now),"accepted non-UTC date");
+  });
+  Run("T2a selection desired newest tie and source",()=>{
+   var original=valid.First();var fields=original.Fields;string source=original.SourceSha;DateTime now=original.Created;
+   var older=new SpatialIdentity.Pair(source,new string('a',64),fields,now.AddDays(-1),"older");
+   var newer=new SpatialIdentity.Pair(source,new string('b',64),fields,now,"newer");
+   var tie=new SpatialIdentity.Pair(source,new string('c',64),fields,now,"tie");
+   var other=new SpatialIdentity.Pair(new string('0',64),new string('d',64),fields,now.AddDays(1),"other");
+   var choices=new[]{tie,other,newer,older};
+   Check(SpatialIdentity.Select(source,older.RecipeSha,choices)==older,"desired recipe did not win");
+   Check(SpatialIdentity.Select(source,new string('f',64),choices)==newer,"newest/tie selection failed");
+   Check(SpatialIdentity.Select(source,null,choices.Reverse())==newer,"selection depends on enumeration order");
+   Check(SpatialIdentity.Select(source,null,new[]{other})==null,"different source selected");
+   Check(SpatialIdentity.Select(source,null,new SpatialIdentity.Pair[0])==null,"empty candidates selected");
+  });
+  Run("T2a selection excludes unsupported",()=>{
+   var original=valid.First();var fields=new Dictionary<string,object>(original.Fields);fields["generator"]="matte-sharp/2";
+   var future=new SpatialIdentity.Pair(original.SourceSha,SpatialIdentity.RecipeSha256(fields),fields,original.Created.AddDays(1),"future");
+   Check(SpatialIdentity.Select(original.SourceSha,future.RecipeSha,new[]{future,original})==original,"unsupported desired recipe selected");
+   Check(SpatialIdentity.Select(original.SourceSha,null,new[]{original,future})==original,"unsupported newest recipe selected");
+   Check(SpatialIdentity.Select(original.SourceSha,null,new[]{future})==null,"unsupported-only candidates selected");
+  });
+ }
  static GenProgress Feed(params string[] lines){var g=new GenProgress();foreach(var l in lines)g.Line(l);return g;}
  // the generation tests' files go in the temp folder: cmd reads batch files in the console code page, so paths stay plain
  static string Plain(string name){string d=Path.Combine(Path.GetTempPath(),"matte-"+name+"-"+Guid.NewGuid().ToString("N").Substring(0,8));Directory.CreateDirectory(d);return d;}
