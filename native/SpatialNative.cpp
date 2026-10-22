@@ -23,6 +23,9 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
+#include <limits>
+#include <new>
+#include <stdexcept>
 #pragma comment(lib,"d3d11.lib")
 #pragma comment(lib,"dxgi.lib")
 #pragma comment(lib,"d3dcompiler.lib")
@@ -33,7 +36,36 @@
 using Microsoft::WRL::ComPtr;
 
 typedef void (__stdcall *SnCallback)(int kind,int sequence);
-enum { EvFirstScene=1, EvTransitionDone=2, EvLoadError=3, EvFadeOutDone=4 };
+enum { EvFirstScene=1, EvTransitionDone=2, EvLoadError=3, EvFadeOutDone=4, EvLoadFailed=5 };
+// Public reason codes, independent of HRESULT/device state. Failure reporting itself never allocates.
+enum { ReasonFormat=1, ReasonBudget=2, ReasonJpeg=3, ReasonImageSize=4,
+	ReasonOpen=101, ReasonRead=102, ReasonAllocation=103, ReasonWic=104, ReasonBuffer=105, ReasonTexture=106, ReasonUnexpected=107 };
+struct Failure { int kind, reason; const char* text; };
+static void Require(bool ok,const char* text,int reason=ReasonFormat){ if(!ok)throw Failure{EvLoadError,reason,text}; }
+static void Runtime(bool ok,const char* text,int reason){ if(!ok)throw Failure{EvLoadFailed,reason,text}; }
+static Failure AllocationFailure(){ return {EvLoadFailed,ReasonAllocation,"allocation failed"}; }
+static Failure UnexpectedFailure(){ return {EvLoadFailed,ReasonUnexpected,"unexpected native exception"}; }
+// Same contract as SpatialFormat.cs. SnLimits exposes every value; the managed tests assert exact parity.
+static constexpr uint64_t MaxFileBytes=1ull<<30, MaxDenseSlots=1ull<<22, MaxBlocks=1ull<<18;
+static constexpr uint64_t MaxVertices=MaxBlocks*4, MaxIndices=MaxBlocks*6, MaxMeshBytes=MaxVertices*20+MaxIndices*4, MaxAtlasPixels=1ull<<26;
+static constexpr uint64_t MaxValidationBytes=(MaxDenseSlots+7)/8+4096, MaxSlices=64, MaxBlockSize=256, MaxDimension=16384, HeaderBytes=68;
+static uint64_t Add(uint64_t a,uint64_t b){ Require(a<=UINT64_MAX-b,"arithmetic overflow"); return a+b; }
+static uint64_t Mul(uint64_t a,uint64_t b){ Require(!b||a<=UINT64_MAX/b,"arithmetic overflow"); return a*b; }
+static bool Dimension(uint64_t n){ return n>=1&&n<=MaxDimension; }
+static bool Positive(float f){ return std::isfinite(f)&&f>0; }
+// Explicit test entry points set this only on their own worker. Normal rendering always leaves it zero.
+// 1: scene allocation; 2: allocation with file open; 3: reject allocation requests >1 MiB;
+// 4: WIC infrastructure; 5: unexpected exception; 6/7: buffer/texture failure; 8: WIC size mismatch.
+static thread_local int testFault=0;
+static thread_local uint64_t allocationBytes=0;
+static void Allocate(uint64_t bytes){ if(testFault==3&&bytes>(1ull<<20))throw std::bad_alloc(); allocationBytes=Add(allocationBytes,bytes); }
+struct FileHandle {
+	HANDLE value=INVALID_HANDLE_VALUE;
+	explicit FileHandle(HANDLE h):value(h){} ~FileHandle(){ if(value!=INVALID_HANDLE_VALUE&&value)CloseHandle(value); }
+	HANDLE Release(){ HANDLE h=value; value=INVALID_HANDLE_VALUE; return h; }
+	FileHandle(const FileHandle&)=delete; FileHandle& operator=(const FileHandle&)=delete;
+};
+struct ComApartment { HRESULT hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED); ~ComApartment(){ if(SUCCEEDED(hr))CoUninitialize(); } };
 
 struct SnStatsData { int64_t presents, sceneDraws, composites, loads, occlusions; double lastLoadMs; int swapKind; int width, height; float minZ; double benchScene, benchComposite; int64_t pauses; int paused; };
 
@@ -51,54 +83,122 @@ struct Vertex { float x, y, z, u, v; };
 static uint32_t U32(const uint8_t* p){ uint32_t v; memcpy(&v,p,4); return v; }
 static float F32(const uint8_t* p){ float v; memcpy(&v,p,4); return v; }
 
-// Bit mask of `count` entries, lowest bit first; the set positions are the indices (a Uint32Array of `expected`).
-static bool ReadMask(const uint8_t* d,size_t size,size_t& off,uint32_t count,uint32_t expected,std::vector<uint32_t>& out){
-	size_t bytes=(count+7)/8; if(off+bytes>size)return false;
-	out.assign(expected,0); uint32_t a=0;
-	for(size_t l=0;l<bytes;l++){ unsigned c=d[off+l]; while(c){ unsigned long bit; _BitScanForward(&bit,c); if(a<expected)out[a]=(uint32_t)(l*8+bit); a++; c&=c-1; } }
-	off+=bytes; return true;
+static void Need(uint64_t off,uint64_t bytes,uint64_t end){ Require(off<=end&&bytes<=end-off,"truncated section"); }
+static bool Bit(const uint8_t* mask,uint64_t n){ return (mask[n/8]&(1u<<(n%8)))!=0; }
+static const uint8_t* ReadMask(const uint8_t* d,uint64_t end,uint64_t& off,uint64_t count,uint64_t expected){
+	Require(expected<=count,"slice counts exceed mask size"); uint64_t bytes=Add(count,7)/8; Need(off,bytes,end);
+	const uint8_t* mask=d+off; uint64_t set=0;
+	for(uint64_t i=0;i<bytes;i++){ unsigned c=mask[i]; while(c){ set++; c&=c-1; } }
+	Require(count%8==0||(mask[bytes-1]>>(count%8))==0,"mask padding bits are set");
+	Require(set==expected,"mask popcount differs from slice count"); off+=bytes; return mask;
 }
-
-static bool ParseSpatial(const std::vector<uint8_t>& file,Header& h,std::vector<Slice>& slices,size_t& colorOff,size_t& alphaOff,std::string& err){
-	const uint8_t* d=file.data(); size_t size=file.size();
-	if(size<68||U32(d)!=4280403){ err="not a Spatial file"; return false; }
+static void CheckHeader(Header& h,uint64_t size,size_t& co,size_t& ao){
+	Require(h.numSlices>=1&&h.numSlices<=MaxSlices,"slice count out of range");
+	Require(h.blockSize>=1&&h.blockSize<=MaxBlockSize,"block size out of range");
+	Require(Dimension(h.imageWidth)&&Dimension(h.imageHeight),"image dimensions out of range");
+	Require(Dimension(h.originalWidth)&&Dimension(h.originalHeight),"original dimensions out of range");
+	Require(Dimension(h.atlasWidth)&&Dimension(h.atlasHeight),"atlas dimensions out of range");
+	Require(Positive(h.focal),"focal must be finite and positive");
+	Require(std::isfinite(h.uvPadding)&&h.uvPadding>=0&&h.uvPadding<=h.blockSize/2.0,"uvPadding out of range");
+	h.gridWidth=h.imageWidth/h.blockSize; h.gridHeight=h.imageHeight/h.blockSize;
+	uint64_t corners=Mul(Add(h.gridWidth,1),Add(h.gridHeight,1)), cells=Mul(h.gridWidth,h.gridHeight);
+	Require(h.gridWidth&&h.gridHeight,"empty block grid");
+	Require(Mul(Add(corners,cells),h.numSlices)<=MaxDenseSlots,"dense slot budget exceeded",ReasonBudget);
+	Require(h.totalCorners>0&&h.totalCorners<=Mul(corners,h.numSlices),"totalCorners out of range");
+	Require(h.totalBlocks>0&&h.totalBlocks<=Mul(cells,h.numSlices),"totalBlocks out of range");
+	Require(h.totalBlocks<=MaxBlocks,"block budget exceeded",ReasonBudget);
+	uint64_t vertices=Mul(h.totalBlocks,4),indices=Mul(h.totalBlocks,6),vb=Mul(vertices,sizeof(Vertex)),ib=Mul(indices,4);
+	Require(vertices<=MaxVertices&&indices<=MaxIndices&&Add(vb,ib)<=MaxMeshBytes&&vb<=UINT32_MAX&&ib<=UINT32_MAX&&indices<=UINT32_MAX,"mesh budget exceeded",ReasonBudget);
+	Require(Mul(h.atlasWidth,h.atlasHeight)<=MaxAtlasPixels,"atlas pixel budget exceeded",ReasonBudget);
+	Require(h.atlasWidth/h.blockSize&&h.atlasHeight/h.blockSize,"empty atlas grid");
+	uint64_t color=Add(HeaderBytes,h.geometryBytes),alpha=Add(color,h.colorBytes),end=Add(alpha,h.alphaBytes);
+	Require(color<=size,"truncated geometry section"); Require(h.colorBytes&&h.alphaBytes,"empty image section");
+	Require(end<=size,"truncated image sections"); Require(end==size,"trailing bytes after image sections"); co=(size_t)color; ao=(size_t)alpha;
+}
+static void CheckProjection(const Header& h,float minZ,float maxZ){
+	float aspect=(float)((double)h.originalWidth/h.originalHeight);
+	double tanHalf=h.originalHeight/(2.0*h.focal)*std::min(1.0,((double)h.originalWidth/h.originalHeight)/aspect);
+	float scale=(float)(1/tanHalf),nearZ=std::max(1e-4f,minZ*.001f),farZ=std::max(100.f,maxZ*100.f),range=nearZ-farZ,product=nearZ*farZ;
+	Require(Positive(scale)&&Positive(scale/aspect)&&std::isfinite(farZ)&&range!=0&&std::isfinite(product)&&std::isfinite(farZ/range)&&std::isfinite(product/range),"camera projection is not finite");
+}
+// The managed validator stops at SOFn too; WIC decoding is a separate, stricter content check.
+static void CheckJpeg(const uint8_t* d,uint64_t size,uint32_t ew,uint32_t eh){
+	uint64_t off=0; auto byte=[&](){ Need(off,1,size); return (unsigned)d[off++]; };
+	auto word=[&](){ unsigned a=byte(); return (a<<8)|byte(); };
+	Require(size>=2&&byte()==255&&byte()==216,"JPEG SOI missing",ReasonJpeg);
+	while(off<size){
+		Require(byte()==255,"JPEG marker missing",ReasonJpeg); unsigned marker; do{ marker=byte(); }while(marker==255);
+		Require(marker!=0&&marker!=216&&marker!=217&&marker!=218&&!(marker>=208&&marker<=215),"JPEG SOF missing",ReasonJpeg);
+		if(marker==1)continue; unsigned length=word(); Require(length>=2,"JPEG segment length invalid",ReasonJpeg);
+		Need(off,length-2,size); uint64_t end=off+length-2;
+		if(marker>=192&&marker<=207&&marker!=196&&marker!=200&&marker!=204){
+			Require(length>=8,"JPEG SOF truncated",ReasonJpeg); unsigned precision=byte(),height=word(),width=word(),components=byte();
+			Require(precision>0&&components>=1&&components<=4&&length==8+3*components,"JPEG SOF layout invalid",ReasonJpeg);
+			Require(Dimension(width)&&Dimension(height)&&Mul(width,height)<=MaxAtlasPixels,"JPEG pixel budget exceeded",ReasonBudget);
+			Require(width==ew&&height==eh,"JPEG dimensions differ from atlas",ReasonImageSize); return;
+		}
+		off=end;
+	}
+	Require(false,"JPEG SOF missing",ReasonJpeg);
+}
+static void Geometry(const std::vector<uint8_t>& file,const Header& h,uint64_t end,std::vector<Slice>* slices){
+	const uint8_t* d=file.data(); uint64_t off=HeaderBytes,gw=h.gridWidth,corners=Mul(gw+1,(uint64_t)h.gridHeight+1),cells=Mul(gw,h.gridHeight),sumCorners=0,sumBlocks=0;
+	float minZ=INFINITY,maxZ=0;
+	for(uint32_t s=0;s<h.numSlices;s++){
+		Need(off,8,end); uint64_t nd=U32(d+off),nb=U32(d+off+4); off+=8;
+		Require(nd<=corners&&nb<=cells,"slice counts exceed mask size"); sumCorners=Add(sumCorners,nd); sumBlocks=Add(sumBlocks,nb);
+		Require(sumCorners<=h.totalCorners&&sumBlocks<=h.totalBlocks,"slice sums exceed header totals");
+		const uint8_t* cm=ReadMask(d,end,off,corners,nd); Need(off,Mul(nd,4),end);
+		Slice* sl=slices?&(*slices)[s]:nullptr;
+		if(sl){ Allocate(Mul(corners,4)); sl->depths.assign((size_t)corners,0.f); }
+		for(uint64_t n=0;n<corners;n++)if(Bit(cm,n)){
+			float z=F32(d+off); off+=4; Require(Positive(z),"depth must be finite and positive"); minZ=std::min(minZ,z); maxZ=std::max(maxZ,z);
+			float scaled=(float)(std::max(h.imageWidth,h.imageHeight)*.5)*z;
+			Require(std::isfinite(scaled)&&std::isfinite(scaled/h.focal),"mesh projection is not finite"); if(sl)sl->depths[(size_t)n]=z;
+		}
+		const uint8_t* bm=ReadMask(d,end,off,cells,nb); Need(off,Mul(nb,2),end);
+		if(sl){ Allocate(Mul(cells,4)); sl->atlasX.assign((size_t)cells,-1); sl->atlasY.assign((size_t)cells,-1); Allocate(Mul(nb,4)); sl->blocks.reserve((size_t)nb); }
+		for(uint64_t n=0;n<cells;n++)if(Bit(bm,n)){
+			uint64_t c=(n/gw)*(gw+1)+n%gw;
+			Require(Bit(cm,c)&&Bit(cm,c+1)&&Bit(cm,c+gw+1)&&Bit(cm,c+gw+2),"block is missing depth corners");
+			unsigned x=d[off++],y=d[off++]; Require(x<h.atlasWidth/h.blockSize&&y<h.atlasHeight/h.blockSize,"atlas coordinate out of range");
+			if(sl){ sl->blocks.push_back((uint32_t)n); sl->atlasX[(size_t)n]=(int16_t)x; sl->atlasY[(size_t)n]=(int16_t)y; }
+		}
+	}
+	Require(sumCorners==h.totalCorners&&sumBlocks==h.totalBlocks,"slice sums differ from header totals");
+	Require(off==end,"geometry end differs from geometryBytes"); CheckProjection(h,minZ,maxZ);
+}
+static void AllocateSlices(std::vector<Slice>& slices,uint32_t count){ Allocate(Mul(count,sizeof(Slice))); slices.resize(count); }
+static void ParseSpatial(const std::vector<uint8_t>& file,Header& h,std::vector<Slice>& slices,size_t& colorOff,size_t& alphaOff){
+	const uint8_t* d=file.data(); uint64_t size=file.size();
+	Require(size<=MaxFileBytes,"file exceeds 1 GiB cap",ReasonBudget);
+	Require(size>=HeaderBytes,"truncated header"); Require(U32(d)==4280403,"not a Spatial file");
 	h.imageWidth=U32(d+4); h.imageHeight=U32(d+8); h.numSlices=U32(d+12); h.blockSize=U32(d+16); h.focal=F32(d+20);
 	h.atlasWidth=U32(d+24); h.atlasHeight=U32(d+28); h.opaqueOnly=(U32(d+32)&1)!=0; h.uvPadding=F32(d+36);
 	h.totalCorners=U32(d+40); h.totalBlocks=U32(d+44); h.geometryBytes=U32(d+48); h.colorBytes=U32(d+52); h.alphaBytes=U32(d+56);
 	h.originalWidth=U32(d+60); h.originalHeight=U32(d+64);
-	if(!h.blockSize||!h.totalBlocks||!h.focal||!h.originalWidth||!h.originalHeight){ err="empty Spatial file"; return false; }
-	h.gridWidth=h.imageWidth/h.blockSize; h.gridHeight=h.imageHeight/h.blockSize;
-	uint32_t corners=(h.gridWidth+1)*(h.gridHeight+1), cells=h.gridWidth*h.gridHeight;
-	size_t off=68; slices.resize(h.numSlices);
-	std::vector<uint32_t> idx;
-	for(uint32_t s=0;s<h.numSlices;s++){
-		if(off+8>size){ err="truncated"; return false; }
-		uint32_t nd=U32(d+off), nb=U32(d+off+4); off+=8;
-		Slice& sl=slices[s];
-		if(!ReadMask(d,size,off,corners,nd,idx)){ err="truncated"; return false; }
-		sl.depths.assign(corners,0.f);
-		if(off+(size_t)nd*4>size){ err="truncated"; return false; }
-		for(uint32_t i:idx){ if(i<corners)sl.depths[i]=F32(d+off); off+=4; }
-		if(!ReadMask(d,size,off,cells,nb,sl.blocks)){ err="truncated"; return false; }
-		sl.atlasX.assign(cells,-1); sl.atlasY.assign(cells,-1);
-		if(off+(size_t)nb*2>size){ err="truncated"; return false; }
-		for(uint32_t i:sl.blocks){ int16_t x=d[off++], y=d[off++]; if(i<cells){ sl.atlasX[i]=x; sl.atlasY[i]=y; } }
-	}
-	colorOff=68+(size_t)h.geometryBytes; alphaOff=colorOff+h.colorBytes;
-	if(alphaOff+h.alphaBytes>size){ err="truncated images"; return false; }
-	return true;
+	CheckHeader(h,size,colorOff,alphaOff);
+	Geometry(file,h,colorOff,nullptr); // Complete allocation-free preflight; no untrusted count reaches a vector.
+	CheckJpeg(d+colorOff,h.colorBytes,h.atlasWidth,h.atlasHeight); CheckJpeg(d+alphaOff,h.alphaBytes,h.atlasWidth,h.atlasHeight);
+	AllocateSlices(slices,h.numSlices); Geometry(file,h,colorOff,&slices);
 }
 
 // viewer.js Xo: one quad per block, back slices first (the draw order is the blend order), float32 math as Math.fround.
 static void BuildMesh(const Header& t,const std::vector<Slice>& slices,std::vector<Vertex>& verts,std::vector<uint32_t>& indices,float& minZ,float& maxZ){
 	verts.clear(); indices.clear(); minZ=INFINITY; maxZ=-INFINITY;
+	uint64_t blocks=0; Require(slices.size()==t.numSlices,"mesh slice count differs");
+	for(const auto& s:slices)blocks=Add(blocks,s.blocks.size());
+	Require(blocks==t.totalBlocks&&blocks>0&&blocks<=MaxBlocks,"mesh block budget exceeded",ReasonBudget);
+	uint64_t nv=Mul(blocks,4),ni=Mul(blocks,6),vb=Mul(nv,sizeof(Vertex)),ib=Mul(ni,4);
+	Require(nv<=MaxVertices&&ni<=MaxIndices&&Add(vb,ib)<=MaxMeshBytes&&vb<=UINT32_MAX&&ib<=UINT32_MAX,"mesh budget exceeded",ReasonBudget);
+	Allocate(vb); verts.reserve((size_t)nv); Allocate(ib); indices.reserve((size_t)ni);
 	auto a=[&](double l,float c,float h)->float{ float d=(float)(l-(double)c); d=d*h; return d/t.focal; };
 	int gw=(int)t.gridWidth, gh=(int)t.gridHeight; float bs=(float)t.blockSize;
 	for(int l=(int)slices.size()-1;l>=0;l--){
 		const Slice& s=slices[l];
 		auto m=[&](int g,int x,int p){ return s.atlasX[g]==x&&s.atlasY[g]==p; };
 		for(uint32_t gu:s.blocks){
-			int g=(int)gu; if(g>=gw*gh)continue;
+			Require(gu<(uint64_t)gw*gh,"mesh block out of range"); int g=(int)gu;
 			int x=g%gw, p=g/gw, u=s.atlasX[g], E=s.atlasY[g];
 			float v=(float)(u*t.blockSize), w=(float)((u+1)*t.blockSize), P=(float)(E*t.blockSize), R=(float)((E+1)*t.blockSize);
 			if(!(x>0&&m(g-1,u-1,E)))v=v+t.uvPadding;
@@ -111,6 +211,7 @@ static void BuildMesh(const Header& t,const std::vector<Slice>& slices,std::vect
 				float nt=s.depths[q[W]*(gw+1)+T[W]];
 				Vertex vx; vx.x=a((double)(T[W]*bs),(float)(t.imageWidth*.5),nt); vx.y=a(t.imageHeight*.5,(float)(q[W]*bs),nt); vx.z=nt;
 				vx.u=(float)((double)M[W]/t.atlasWidth); vx.v=(float)((double)b[W]/t.atlasHeight);
+				Require(std::isfinite(vx.x)&&std::isfinite(vx.y)&&Positive(vx.z)&&std::isfinite(vx.u)&&std::isfinite(vx.v),"mesh vertex is not finite");
 				verts.push_back(vx); if(nt<minZ)minZ=nt; if(nt>maxZ)maxZ=nt;
 			}
 			uint32_t q6[6]={z,z+1,z+2,z,z+2,z+3}; indices.insert(indices.end(),q6,q6+6);
@@ -119,43 +220,79 @@ static void BuildMesh(const Header& t,const std::vector<Slice>& slices,std::vect
 }
 
 // ---- images --------------------------------------------------------------------------------------------------
-static HRESULT DecodeJpeg(IWICImagingFactory* wic,const uint8_t* data,size_t size,bool gray,std::vector<uint8_t>& out,UINT& w,UINT& h){
-	ComPtr<IWICStream> stream; HRESULT hr=wic->CreateStream(&stream); if(FAILED(hr))return hr;
-	hr=stream->InitializeFromMemory(const_cast<BYTE*>(data),(DWORD)size); if(FAILED(hr))return hr;
-	ComPtr<IWICBitmapDecoder> dec; hr=wic->CreateDecoderFromStream(stream.Get(),nullptr,WICDecodeMetadataCacheOnDemand,&dec); if(FAILED(hr))return hr;
-	ComPtr<IWICBitmapFrameDecode> frame; hr=dec->GetFrame(0,&frame); if(FAILED(hr))return hr;
-	hr=frame->GetSize(&w,&h); if(FAILED(hr))return hr;
-	WICPixelFormatGUID src; frame->GetPixelFormat(&src);
-	if(gray&&src==GUID_WICPixelFormat8bppGray){ out.resize((size_t)w*h); return frame->CopyPixels(nullptr,w,(UINT)out.size(),out.data()); }
-	ComPtr<IWICFormatConverter> conv; hr=wic->CreateFormatConverter(&conv); if(FAILED(hr))return hr;
-	hr=conv->Initialize(frame.Get(),GUID_WICPixelFormat32bppRGBA,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom); if(FAILED(hr))return hr;
-	if(!gray){ out.resize((size_t)w*h*4); return conv->CopyPixels(nullptr,w*4,(UINT)out.size(),out.data()); }
-	// a colour alpha image: viewer.js samples its green channel
-	std::vector<uint8_t> row((size_t)w*4); out.resize((size_t)w*h);
-	for(UINT y=0;y<h;y++){ WICRect r={0,(INT)y,(INT)w,1}; hr=conv->CopyPixels(&r,w*4,(UINT)row.size(),row.data()); if(FAILED(hr))return hr; for(UINT x=0;x<w;x++)out[(size_t)y*w+x]=row[x*4+1]; }
-	return S_OK;
+static void WicResult(HRESULT hr,const char* stage){
+	if(SUCCEEDED(hr))return;
+	if(hr==E_OUTOFMEMORY||hr==HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY))throw AllocationFailure();
+	bool content=hr==WINCODEC_ERR_BADIMAGE||hr==WINCODEC_ERR_BADHEADER||hr==WINCODEC_ERR_FRAMEMISSING||hr==WINCODEC_ERR_BADMETADATAHEADER||
+		hr==WINCODEC_ERR_UNKNOWNIMAGEFORMAT||hr==WINCODEC_ERR_BADSTREAMDATA||hr==WINCODEC_ERR_STREAMREAD||hr==WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT||
+		hr==WINCODEC_ERR_VALUEOUTOFRANGE||hr==WINCODEC_ERR_TOOMUCHMETADATA||hr==WINCODEC_ERR_IMAGESIZEOUTOFRANGE;
+	throw Failure{content?EvLoadError:EvLoadFailed,content?ReasonJpeg:ReasonWic,stage};
+}
+static ComPtr<IWICImagingFactory> MakeWic(){
+	Runtime(testFault!=4,"WIC infrastructure unavailable",ReasonWic); ComPtr<IWICImagingFactory> wic;
+	HRESULT hr=CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&wic));
+	if(hr==E_OUTOFMEMORY)throw AllocationFailure(); Runtime(SUCCEEDED(hr)&&wic,"WIC factory unavailable",ReasonWic); return wic;
+}
+static ComPtr<IWICBitmapFrameDecode> OpenJpeg(IWICImagingFactory* wic,const uint8_t* data,size_t size,UINT ew,UINT eh){
+	Runtime(wic!=nullptr,"WIC factory unavailable",ReasonWic); Require(size<=MaxFileBytes,"image size exceeds cap",ReasonBudget);
+	ComPtr<IWICStream> stream; WicResult(wic->CreateStream(&stream),"WIC stream creation failed");
+	WicResult(stream->InitializeFromMemory(const_cast<BYTE*>(data),(DWORD)size),"WIC memory stream failed");
+	ComPtr<IWICBitmapDecoder> dec; WicResult(wic->CreateDecoderFromStream(stream.Get(),nullptr,WICDecodeMetadataCacheOnDemand,&dec),"JPEG decoder failed");
+	ComPtr<IWICBitmapFrameDecode> frame; WicResult(dec->GetFrame(0,&frame),"JPEG frame failed");
+	UINT w,h; WicResult(frame->GetSize(&w,&h),"JPEG size unavailable");
+	if(testFault==8)w++; // Verify the WIC check itself, independently of the SOFn preflight.
+	Require(Dimension(w)&&Dimension(h)&&Mul(w,h)<=MaxAtlasPixels,"decoded image exceeds pixel budget",ReasonBudget);
+	Require(w==ew&&h==eh,"decoded image dimensions differ from atlas",ReasonImageSize); return frame;
+}
+static ComPtr<IWICFormatConverter> Rgba(IWICImagingFactory* wic,IWICBitmapFrameDecode* frame){
+	ComPtr<IWICFormatConverter> conv; WicResult(wic->CreateFormatConverter(&conv),"WIC converter creation failed");
+	WicResult(conv->Initialize(frame,GUID_WICPixelFormat32bppRGBA,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom),"JPEG pixel conversion failed"); return conv;
+}
+static void DecodeJpeg(IWICImagingFactory* wic,const uint8_t* data,size_t size,std::vector<uint8_t>& out,UINT w,UINT h){
+	auto frame=OpenJpeg(wic,data,size,w,h); WICPixelFormatGUID src; WicResult(frame->GetPixelFormat(&src),"JPEG pixel format unavailable");
+	Allocate(Mul(w,h)); out.resize((size_t)w*h);
+	if(src==GUID_WICPixelFormat8bppGray){ WicResult(frame->CopyPixels(nullptr,w,(UINT)out.size(),out.data()),"JPEG alpha decode failed"); return; }
+	auto conv=Rgba(wic,frame.Get()); Allocate(Mul(w,4)); std::vector<uint8_t> row((size_t)w*4);
+	// A colour alpha image: viewer.js samples its green channel.
+	for(UINT y=0;y<h;y++){ WICRect r={0,(INT)y,(INT)w,1}; WicResult(conv->CopyPixels(&r,w*4,(UINT)row.size(),row.data()),"JPEG alpha decode failed"); for(UINT x=0;x<w;x++)out[(size_t)y*w+x]=row[x*4+1]; }
+}
+// No D3D and no full decoded image: exercise every scanline, including corrupt entropy data after SOFn.
+static void DecodeJpegBounded(IWICImagingFactory* wic,const uint8_t* data,size_t size,UINT w,UINT h){
+	auto frame=OpenJpeg(wic,data,size,w,h); auto conv=Rgba(wic,frame.Get()); UINT rows=std::min(256u,h);
+	uint64_t bytes=Mul(Mul(w,4),rows); Allocate(bytes); std::vector<uint8_t> strip((size_t)bytes);
+	for(UINT y=0;y<h;y+=rows){ WICRect rect={0,(INT)y,(INT)w,(INT)std::min(rows,h-y)}; WicResult(conv->CopyPixels(&rect,w*4,(UINT)strip.size(),strip.data()),"JPEG pixel decode failed"); }
 }
 
 // The colour atlas (up to ~5k x 5k) is decoded in strips straight into the texture, so no full-size copy is held in memory.
 // ctx: the immediate context, multithread-protected (Renderer::Init), so the loader thread can upload in strips.
-static HRESULT DecodeJpegToTexture(IWICImagingFactory* wic,ID3D11Device* dev,ID3D11DeviceContext* ctx,const uint8_t* data,size_t size,ComPtr<ID3D11ShaderResourceView>& srv){
-	ComPtr<IWICStream> stream; HRESULT hr=wic->CreateStream(&stream); if(FAILED(hr))return hr;
-	hr=stream->InitializeFromMemory(const_cast<BYTE*>(data),(DWORD)size); if(FAILED(hr))return hr;
-	ComPtr<IWICBitmapDecoder> dec; hr=wic->CreateDecoderFromStream(stream.Get(),nullptr,WICDecodeMetadataCacheOnDemand,&dec); if(FAILED(hr))return hr;
-	ComPtr<IWICBitmapFrameDecode> frame; hr=dec->GetFrame(0,&frame); if(FAILED(hr))return hr;
-	UINT w,h; hr=frame->GetSize(&w,&h); if(FAILED(hr))return hr;
-	ComPtr<IWICFormatConverter> conv; hr=wic->CreateFormatConverter(&conv); if(FAILED(hr))return hr;
-	hr=conv->Initialize(frame.Get(),GUID_WICPixelFormat32bppRGBA,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom); if(FAILED(hr))return hr;
+static void DecodeJpegToTexture(IWICImagingFactory* wic,ID3D11Device* dev,ID3D11DeviceContext* ctx,const uint8_t* data,size_t size,UINT w,UINT h,ComPtr<ID3D11ShaderResourceView>& srv){
+	auto frame=OpenJpeg(wic,data,size,w,h); auto conv=Rgba(wic,frame.Get());
 	D3D11_TEXTURE2D_DESC td={}; td.Width=w; td.Height=h; td.MipLevels=1; td.ArraySize=1; td.Format=DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; td.SampleDesc.Count=1;
 	td.Usage=D3D11_USAGE_DEFAULT; td.BindFlags=D3D11_BIND_SHADER_RESOURCE;
-	ComPtr<ID3D11Texture2D> tex; hr=dev->CreateTexture2D(&td,nullptr,&tex); if(FAILED(hr))return hr;
-	const UINT strip=256; std::vector<uint8_t> buf((size_t)w*4*strip);
+	ComPtr<ID3D11Texture2D> tex; Runtime(SUCCEEDED(dev->CreateTexture2D(&td,nullptr,&tex)),"color texture creation failed",ReasonTexture);
+	const UINT strip=256; Allocate(Mul(Mul(w,4),strip)); std::vector<uint8_t> buf((size_t)w*4*strip);
 	for(UINT y=0;y<h;y+=strip){
 		UINT n=std::min(strip,h-y); WICRect r={0,(INT)y,(INT)w,(INT)n};
-		hr=conv->CopyPixels(&r,w*4,w*4*n,buf.data()); if(FAILED(hr))return hr;
+		WicResult(conv->CopyPixels(&r,w*4,w*4*n,buf.data()),"JPEG color decode failed");
 		D3D11_BOX box={0,y,0,w,y+n,1}; ctx->UpdateSubresource(tex.Get(),0,&box,buf.data(),w*4,0);
 	}
-	return dev->CreateShaderResourceView(tex.Get(),nullptr,&srv);
+	Runtime(SUCCEEDED(dev->CreateShaderResourceView(tex.Get(),nullptr,&srv)),"color texture view failed",ReasonTexture);
+}
+
+static void ReadSpatialFile(const wchar_t* path,std::vector<uint8_t>& file){
+	FileHandle f(CreateFileW(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_SEQUENTIAL_SCAN,nullptr));
+	Runtime(f.value!=INVALID_HANDLE_VALUE,"file open failed",ReasonOpen);
+	LARGE_INTEGER size={}; Runtime(GetFileSizeEx(f.value,&size)!=FALSE&&size.QuadPart>=0,"file size read failed",ReasonRead);
+	Require((uint64_t)size.QuadPart<=MaxFileBytes,"file exceeds 1 GiB cap",ReasonBudget); Require(size.QuadPart>=HeaderBytes,"truncated header");
+	if(testFault==2)throw std::bad_alloc(); if(testFault==5)throw std::runtime_error("injected failure");
+	Allocate((uint64_t)size.QuadPart); file.resize((size_t)size.QuadPart); uint64_t off=0;
+	while(off<(uint64_t)size.QuadPart){ DWORD want=(DWORD)std::min(1ull<<20,(uint64_t)size.QuadPart-off),got=0;
+		Runtime(testFault!=9,"file read failed",ReasonRead);
+		Runtime(ReadFile(f.value,file.data()+(size_t)off,want,&got,nullptr)!=FALSE&&got>0,"file read failed",ReasonRead); off+=got;
+	}
+}
+static void PrepareSpatial(const wchar_t* path,std::vector<uint8_t>& file,Header& h,std::vector<Vertex>& verts,std::vector<uint32_t>& idx,float& minZ,float& maxZ,size_t& co,size_t& ao){
+	ReadSpatialFile(path,file); std::vector<Slice> slices; ParseSpatial(file,h,slices,co,ao); BuildMesh(h,slices,verts,idx,minZ,maxZ);
 }
 
 static HRESULT MakeTexture(ID3D11Device* dev,DXGI_FORMAT fmt,UINT w,UINT h,const void* data,UINT pitch,ComPtr<ID3D11ShaderResourceView>& srv){
@@ -246,8 +383,12 @@ struct Renderer {
 
 	std::mutex loadLock; std::condition_variable loadCv; std::wstring loadPath; int loadSequence=0; bool loadPending=false;
 	std::thread renderThread, loaderThread;
+	struct LoadError { int sequence=0; Failure failure={}; };
+	std::mutex errorLock; LoadError loadErrors[64]={}; unsigned errorNext=0;
+	bool testOnly=false; int loaderFault=0; // Only SnTestLoader creates this headless, one-request renderer.
 
-	void Emit(int kind,int seq){ if(callback)callback(kind,seq); }
+	void Emit(int kind,int seq)noexcept{ try{ if(callback)callback(kind,seq); }catch(...){} }
+	void Report(int seq,Failure f){ { std::lock_guard<std::mutex> g(errorLock); auto& e=loadErrors[errorNext++%64]; e.sequence=seq; e.failure=f; } if(!quit)Emit(f.kind,seq); }
 
 	HRESULT Init(std::string& err){
 		UINT flags=D3D11_CREATE_DEVICE_BGRA_SUPPORT; D3D_FEATURE_LEVEL levels[]={D3D_FEATURE_LEVEL_11_1,D3D_FEATURE_LEVEL_11_0,D3D_FEATURE_LEVEL_10_1,D3D_FEATURE_LEVEL_10_0};
@@ -614,88 +755,131 @@ struct Renderer {
 	}
 
 	void LoaderRun(){
-		CoInitializeEx(nullptr,COINIT_MULTITHREADED);
-		ComPtr<IWICImagingFactory> wic; CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&wic));
+		ComApartment apartment; testFault=loaderFault; allocationBytes=0;
 		for(;;){
-			std::wstring path; int seq;
-			{ std::unique_lock<std::mutex> g(loadLock); loadCv.wait(g,[&]{ return loadPending||quit.load(); }); if(quit)break; path=loadPath; seq=loadSequence; loadPending=false; }
-			double t0=Now(); std::string err; auto s=std::make_shared<Scene>(); s->sequence=seq;
-			if(!Load(wic.Get(),path,*s,err)){ if(!quit)Emit(EvLoadError,seq); continue; }
-			std::lock_guard<std::mutex> g(lock);
-			if(seq!=latestSequence||quit)continue;
-			memcpy(s->bg,pendingBg,sizeof pendingBg); s->backdrop=pendingBackdrop; ready=s; stats.loads++; stats.lastLoadMs=Now()-t0; stats.minZ=s->minZ; SetEvent(wake);
+			int seq=0; Failure failure={};
+			// Includes request transfer, make_shared, all parsing/decoding/uploading, and ready publication.
+			try{ // LOADER_BOUNDARY_BEGIN
+				std::wstring path;
+				{ std::unique_lock<std::mutex> g(loadLock); loadCv.wait(g,[&]{ return loadPending||quit.load(); }); if(quit)break; seq=loadSequence; path.swap(loadPath); loadPending=false; }
+				allocationBytes=0; double t0=Now(); if(testFault==1)throw std::bad_alloc(); auto s=std::make_shared<Scene>(); s->sequence=seq;
+				Runtime(SUCCEEDED(apartment.hr),"loader COM initialization failed",ReasonWic); Load(path,*s);
+				std::lock_guard<std::mutex> g(lock);
+				if(seq==latestSequence&&!quit&&!testOnly){ memcpy(s->bg,pendingBg,sizeof pendingBg); s->backdrop=pendingBackdrop; ready=s; stats.loads++; stats.lastLoadMs=Now()-t0; stats.minZ=s->minZ; SetEvent(wake); }
+			}catch(const Failure& f){ failure=f; }catch(const std::bad_alloc&){ failure=AllocationFailure(); }catch(...){ failure=UnexpectedFailure(); } // LOADER_BOUNDARY_END
+			if(failure.kind)Report(seq,failure);
+			if(testOnly)break;
 		}
-		CoUninitialize();
+		testFault=0;
 	}
 
-	bool Load(IWICImagingFactory* wic,const std::wstring& path,Scene& s,std::string& err){
-		std::vector<uint8_t> file;
-		{ HANDLE f=CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_SEQUENTIAL_SCAN,nullptr);
-			if(f==INVALID_HANDLE_VALUE){ err="open"; return false; }
-			LARGE_INTEGER sz; GetFileSizeEx(f,&sz); file.resize((size_t)sz.QuadPart); DWORD got=0; BOOL ok=ReadFile(f,file.data(),(DWORD)file.size(),&got,nullptr); CloseHandle(f);
-			if(!ok||got!=file.size()){ err="read"; return false; } }
-		std::vector<Slice> slices; size_t co,ao;
-		if(!ParseSpatial(file,s.h,slices,co,ao,err))return false;
-		std::vector<Vertex> verts; std::vector<uint32_t> idx; BuildMesh(s.h,slices,verts,idx,s.minZ,s.maxZ); slices.clear();
-		if(verts.empty()){ err="no blocks"; return false; }
+	void Load(const std::wstring& path,Scene& s){
+		std::vector<uint8_t> file; std::vector<Vertex> verts; std::vector<uint32_t> idx; size_t co,ao;
+		PrepareSpatial(path.c_str(),file,s.h,verts,idx,s.minZ,s.maxZ,co,ao); auto wic=MakeWic();
+		Runtime(testFault!=6,"vertex/index buffer creation failed",ReasonBuffer); Runtime(testFault!=7,"texture creation failed",ReasonTexture);
+		if(testOnly){ DecodeJpegBounded(wic.Get(),file.data()+co,s.h.colorBytes,s.h.atlasWidth,s.h.atlasHeight); DecodeJpegBounded(wic.Get(),file.data()+ao,s.h.alphaBytes,s.h.atlasWidth,s.h.atlasHeight); return; }
 		D3D11_BUFFER_DESC bd={}; bd.Usage=D3D11_USAGE_IMMUTABLE; bd.BindFlags=D3D11_BIND_VERTEX_BUFFER; bd.ByteWidth=(UINT)(verts.size()*sizeof(Vertex));
-		D3D11_SUBRESOURCE_DATA sd={verts.data()}; if(FAILED(dev->CreateBuffer(&bd,&sd,&s.vb))){ err="vb"; return false; }
-		bd.BindFlags=D3D11_BIND_INDEX_BUFFER; bd.ByteWidth=(UINT)(idx.size()*4); sd.pSysMem=idx.data(); if(FAILED(dev->CreateBuffer(&bd,&sd,&s.ib))){ err="ib"; return false; }
+		D3D11_SUBRESOURCE_DATA sd={verts.data()}; Runtime(SUCCEEDED(dev->CreateBuffer(&bd,&sd,&s.vb)),"vertex buffer creation failed",ReasonBuffer);
+		bd.BindFlags=D3D11_BIND_INDEX_BUFFER; bd.ByteWidth=(UINT)(idx.size()*4); sd.pSysMem=idx.data(); Runtime(SUCCEEDED(dev->CreateBuffer(&bd,&sd,&s.ib)),"index buffer creation failed",ReasonBuffer);
 		s.indexCount=(UINT)idx.size();
-		std::vector<uint8_t> px; UINT w,h;
-		if(FAILED(DecodeJpegToTexture(wic,dev.Get(),ctx.Get(),file.data()+co,s.h.colorBytes,s.color))){ err="colour image"; return false; }
-		if(FAILED(DecodeJpeg(wic,file.data()+ao,s.h.alphaBytes,true,px,w,h))){ err="alpha image"; return false; }
-		if(FAILED(MakeTexture(dev.Get(),DXGI_FORMAT_R8_UNORM,w,h,px.data(),w,s.alpha))){ err="alpha texture"; return false; }
-		return true;
+		DecodeJpegToTexture(wic.Get(),dev.Get(),ctx.Get(),file.data()+co,s.h.colorBytes,s.h.atlasWidth,s.h.atlasHeight,s.color);
+		std::vector<uint8_t> px; DecodeJpeg(wic.Get(),file.data()+ao,s.h.alphaBytes,px,s.h.atlasWidth,s.h.atlasHeight);
+		Runtime(SUCCEEDED(MakeTexture(dev.Get(),DXGI_FORMAT_R8_UNORM,s.h.atlasWidth,s.h.atlasHeight,px.data(),s.h.atlasWidth,s.alpha)),"alpha texture creation failed",ReasonTexture);
 	}
 };
 
 static void SetRgb(float* out,unsigned rgb){ out[0]=((rgb>>16)&255)/255.f; out[1]=((rgb>>8)&255)/255.f; out[2]=(rgb&255)/255.f; }
+template<class F> static Failure Boundary(F&& action)noexcept{
+	try{ action(); return {}; }catch(const Failure& f){ return f; }catch(const std::bad_alloc&){ return AllocationFailure(); }catch(...){ return UnexpectedFailure(); }
+}
+static int WriteFailure(Failure f,wchar_t* error,int len){ if(error&&len>0){ if(f.kind)_snwprintf_s(error,len,_TRUNCATE,L"%d: %hs",f.reason,f.text); else error[0]=0; } return f.kind; }
+static void ReportApiFailure(Renderer* r,Failure f,int seq=-1){ if(!f.kind)return; if(seq<0){ std::lock_guard<std::mutex> g(r->lock); seq=r->latestSequence; } r->Report(seq,f); }
+static void ValidateFile(const wchar_t* path,bool decode){
+	allocationBytes=0; std::vector<uint8_t> file; Header h={}; std::vector<Vertex> verts; std::vector<uint32_t> idx; float minZ,maxZ; size_t co,ao;
+	PrepareSpatial(path,file,h,verts,idx,minZ,maxZ,co,ao);
+	if(decode){ ComApartment apartment; Runtime(SUCCEEDED(apartment.hr)||apartment.hr==RPC_E_CHANGED_MODE,"validation COM initialization failed",ReasonWic); auto wic=MakeWic();
+		DecodeJpegBounded(wic.Get(),file.data()+co,h.colorBytes,h.atlasWidth,h.atlasHeight); DecodeJpegBounded(wic.Get(),file.data()+ao,h.alphaBytes,h.atlasWidth,h.atlasHeight);
+	}
+}
 
 extern "C" {
+__declspec(dllexport) int __stdcall SnLimits(uint64_t* values,int count){
+	const uint64_t limits[]={MaxFileBytes,MaxDenseSlots,MaxBlocks,MaxVertices,MaxIndices,MaxMeshBytes,MaxAtlasPixels,MaxValidationBytes,MaxSlices,MaxBlockSize,MaxDimension,HeaderBytes};
+	const int n=(int)(sizeof(limits)/sizeof(limits[0])); if(values&&count>=n)memcpy(values,limits,sizeof limits); return n;
+}
+// 0 = OK, 3 = content failure, 5 = runtime failure. A diagnostic starts with the stable numeric reason code.
+__declspec(dllexport) int __stdcall SnValidate(const wchar_t* path,wchar_t* error,int len){ return WriteFailure(Boundary([&]{ ValidateFile(path,true); }),error,len); }
+__declspec(dllexport) int __stdcall SnValidateStructure(const wchar_t* path,wchar_t* error,int len){ return WriteFailure(Boundary([&]{ ValidateFile(path,false); }),error,len); }
+// Query in the callback before dispatching to the UI. The bounded history also tolerates delayed readers;
+// an evicted/unknown sequence returns 0, never another sequence's reason.
+__declspec(dllexport) int __stdcall SnLastError(void* p,int sequence,int* reason,wchar_t* error,int len){
+	if(!p){ if(reason)*reason=0; if(error&&len>0)error[0]=0; return 0; } // Dispose may clear the managed handle before joining callbacks.
+	Failure f={}; auto r=(Renderer*)p;
+	Failure query=Boundary([&]{ std::lock_guard<std::mutex> g(r->errorLock); for(unsigned n=0;n<std::min(r->errorNext,64u);n++){ auto& e=r->loadErrors[(r->errorNext-1-n)%64]; if(e.sequence==sequence){ f=e.failure; break; } } });
+	if(query.kind)f=query; if(reason)*reason=f.reason; return WriteFailure(f,error,len);
+}
+// Test-only operation, explicitly invoked: run the actual LoaderRun on a real worker without a window/D3D.
+// Faults never depend on environment variables or file contents. They are scoped to this one renderer/thread.
+__declspec(dllexport) int __stdcall SnTestLoader(const wchar_t* path,int fault,SnCallback callback,int* reason,wchar_t* error,int len){
+	int kind=0; Failure f=Boundary([&]{ Renderer r; r.testOnly=true; r.loaderFault=fault; r.callback=callback; r.loadPath=path; r.loadPending=true; r.loadSequence=r.latestSequence=1;
+		std::thread worker([&]{ r.LoaderRun(); }); worker.join(); kind=SnLastError(&r,1,reason,error,len);
+	}); if(f.kind){ if(reason)*reason=f.reason; return WriteFailure(f,error,len); } return kind;
+}
 __declspec(dllexport) void* __stdcall SnCreate(HWND hwnd,int width,int height,unsigned rgb,SnCallback cb,wchar_t* error,int errorLen){
-	auto r=new Renderer(); r->hwnd=hwnd; r->width=width; r->height=height; r->callback=cb; SetRgb(r->pendingBg,rgb); memcpy(r->bgNow,r->pendingBg,sizeof r->bgNow);
+	Renderer* result=nullptr; Failure failure=Boundary([&]{
+	auto r=std::make_unique<Renderer>(); r->hwnd=hwnd; r->width=width; r->height=height; r->callback=cb; SetRgb(r->pendingBg,rgb); memcpy(r->bgNow,r->pendingBg,sizeof r->bgNow);
 	std::string err; HRESULT hr=r->Init(err);
-	if(FAILED(hr)){ if(error&&errorLen>0)_snwprintf_s(error,errorLen,_TRUNCATE,L"%hs (0x%08X)",err.c_str(),(unsigned)hr); r->dev.Reset(); delete r; return nullptr; }
+	if(FAILED(hr)){ if(error&&errorLen>0)_snwprintf_s(error,errorLen,_TRUNCATE,L"%hs (0x%08X)",err.c_str(),(unsigned)hr); return; }
 	r->stats.swapKind=r->swapKind; r->stats.width=width; r->stats.height=height;
-	r->wake=CreateEventW(nullptr,FALSE,FALSE,nullptr); r->firstPresent=CreateEventW(nullptr,TRUE,FALSE,nullptr); r->captureDone=CreateEventW(nullptr,FALSE,FALSE,nullptr);
-	return r;
+	FileHandle wake(CreateEventW(nullptr,FALSE,FALSE,nullptr)),first(CreateEventW(nullptr,TRUE,FALSE,nullptr)),capture(CreateEventW(nullptr,FALSE,FALSE,nullptr));
+	Runtime(wake.value&&first.value&&capture.value,"renderer event creation failed",ReasonUnexpected);
+	r->wake=wake.Release(); r->firstPresent=first.Release(); r->captureDone=capture.Release(); result=r.release();
+	}); if(failure.kind)WriteFailure(failure,error,errorLen); return result;
 }
 // The flat still shown until the first scene fades in (BGRA, the window's size). Call before SnStart.
 __declspec(dllexport) void __stdcall SnSetStill(void* p,const void* bgra,int w,int h,int stride){
-	auto r=(Renderer*)p; std::lock_guard<std::mutex> g(r->lock);
+	auto r=(Renderer*)p; Failure failure=Boundary([&]{ std::lock_guard<std::mutex> g(r->lock);
 	r->stillPixels.resize((size_t)w*h*4); for(int y=0;y<h;y++)memcpy(r->stillPixels.data()+(size_t)y*w*4,(const uint8_t*)bgra+(size_t)y*stride,(size_t)w*4);
 	r->stillW=w; r->stillH=h; r->stillNew=true; SetEvent(r->wake);
+	}); ReportApiFailure(r,failure);
 }
 // How long the first scene takes to come in over the still (700 ms by default; a slide's 1600 when the still is the
 // photo before). Before SnStart.
 __declspec(dllexport) void __stdcall SnSetStillFade(void* p,int ms){ ((Renderer*)p)->stillFadeMs=ms<0?700:ms; }
 __declspec(dllexport) int __stdcall SnStart(void* p,int waitMs){
-	auto r=(Renderer*)p; r->renderThread=std::thread([r]{ r->RenderRun(); }); r->loaderThread=std::thread([r]{ r->LoaderRun(); });
+	auto r=(Renderer*)p; Failure failure=Boundary([&]{
+		r->renderThread=std::thread([r]{ ReportApiFailure(r,Boundary([&]{ r->RenderRun(); })); });
+		r->loaderThread=std::thread([r]{ r->LoaderRun(); });
+	});
+	if(failure.kind){ ReportApiFailure(r,failure); r->quit=true; SetEvent(r->wake); r->loadCv.notify_all(); if(r->renderThread.joinable())r->renderThread.join(); if(r->loaderThread.joinable())r->loaderThread.join(); return 0; }
 	return WaitForSingleObject(r->firstPresent,waitMs)==WAIT_OBJECT_0;
 }
 __declspec(dllexport) void __stdcall SnShow(void* p,const wchar_t* path,unsigned rgb,int sequence){
 	auto r=(Renderer*)p;
+	Failure failure=Boundary([&]{
 	{ std::lock_guard<std::mutex> g(r->lock); r->latestSequence=sequence; SetRgb(r->pendingBg,rgb); }
 	{ std::lock_guard<std::mutex> g(r->loadLock); r->loadPath=path; r->loadSequence=sequence; r->loadPending=true; }
 	r->loadCv.notify_one();
+	}); ReportApiFailure(r,failure,sequence);
 }
 // The ambient background for the scenes shown after this (BGRA, exactly the window's size); null = the colour again.
 __declspec(dllexport) void __stdcall SnSetBackdrop(void* p,const void* bgra,int w,int h,int stride){
-	auto r=(Renderer*)p; ComPtr<ID3D11ShaderResourceView> srv;
+	auto r=(Renderer*)p; Failure failure=Boundary([&]{ ComPtr<ID3D11ShaderResourceView> srv;
 	if(bgra&&w==r->width&&h==r->height){
 		std::vector<uint8_t> px((size_t)w*h*4); for(int y=0;y<h;y++)memcpy(px.data()+(size_t)y*w*4,(const uint8_t*)bgra+(size_t)y*stride,(size_t)w*4);
 		if(FAILED(MakeTexture(r->dev.Get(),DXGI_FORMAT_B8G8R8A8_UNORM,w,h,px.data(),w*4,srv)))srv.Reset();
 	}
 	std::lock_guard<std::mutex> g(r->lock); r->pendingBackdrop=srv;
+	}); ReportApiFailure(r,failure);
 }
 // Live colour change: every scene on screen, and the one still loading.
 __declspec(dllexport) void __stdcall SnSetColor(void* p,unsigned rgb){ auto r=(Renderer*)p; std::lock_guard<std::mutex> g(r->lock); SetRgb(r->pendingBg,rgb); r->colorChanged=true; SetEvent(r->wake); }
 // Fades to the given still over ms, then EvFadeOutDone (the host closes). Scenes arriving later are ignored.
 __declspec(dllexport) void __stdcall SnFadeOut(void* p,const void* bgra,int w,int h,int stride,int ms){
-	auto r=(Renderer*)p; std::lock_guard<std::mutex> g(r->lock);
+	auto r=(Renderer*)p; Failure failure=Boundary([&]{ std::lock_guard<std::mutex> g(r->lock);
 	r->stillPixels.resize((size_t)w*h*4); for(int y=0;y<h;y++)memcpy(r->stillPixels.data()+(size_t)y*w*4,(const uint8_t*)bgra+(size_t)y*stride,(size_t)w*4);
 	r->stillW=w; r->stillH=h; r->stillNew=true; r->fadeOutMs=ms; SetEvent(r->wake);
+	}); ReportApiFailure(r,failure);
 }
 // Tests: mode 1 = fixed pointer (x,y in -1..1), 0 = cursor; settle = put the camera on its target now.
 __declspec(dllexport) void __stdcall SnSetPointer(void* p,int mode,float x,float y,int settle){ auto r=(Renderer*)p; std::lock_guard<std::mutex> g(r->lock); r->pointerFixed=mode==1; r->pointerCircle=mode==2; r->fixedX=x; r->fixedY=y; if(settle)r->settle=true; SetEvent(r->wake); }

@@ -7,10 +7,18 @@ using System.Text;
 // SpatialNative.dll (native\SpatialNative.cpp): the Direct3D 11 Spatial renderer. It reads the .spatial file, the cursor
 // and the frame clock itself on its own threads; this is only the call surface. Events arrive on a renderer thread.
 sealed class NativeSpatial : IDisposable {
- internal const int FirstScene=1,TransitionDone=2,LoadError=3,FadeOutDone=4;
+ internal const int FirstScene=1,TransitionDone=2,LoadError=3,FadeOutDone=4,LoadFailed=5;
+ internal enum FailureReason{None=0,Format=1,Budget=2,Jpeg=3,ImageSize=4,Open=101,Read=102,Allocation=103,Wic=104,Buffer=105,Texture=106,Unexpected=107}
  [UnmanagedFunctionPointer(CallingConvention.StdCall)] internal delegate void EventProc(int kind,int sequence);
  [StructLayout(LayoutKind.Sequential)] internal struct Stats{public long Presents,SceneDraws,Composites,Loads,Occlusions;public double LastLoadMs;public int SwapKind,Width,Height;public float MinZ;public double BenchScene,BenchComposite;public long Pauses;public int Paused;}
  const string Dll="SpatialNative.dll";
+ [DllImport(Dll)] internal static extern int SnLimits([Out] long[] values,int count);
+ [DllImport(Dll,CharSet=CharSet.Unicode)] internal static extern int SnValidate(string path,StringBuilder error,int errorLen);
+ [DllImport(Dll,CharSet=CharSet.Unicode)] internal static extern int SnValidateStructure(string path,StringBuilder error,int errorLen);
+ [DllImport(Dll,CharSet=CharSet.Unicode)] internal static extern int SnTestLoader(string path,int fault,EventProc callback,out FailureReason reason,StringBuilder error,int errorLen);
+ [DllImport(Dll,CharSet=CharSet.Unicode)] static extern int SnLastError(IntPtr r,int sequence,out FailureReason reason,StringBuilder error,int errorLen);
+ // Capture synchronously in the native event callback, before posting the event to the UI (T3c).
+ internal int LastError(int sequence,out FailureReason reason,StringBuilder error){return SnLastError(r,sequence,out reason,error,error.Capacity);}
  [DllImport(Dll,CharSet=CharSet.Unicode)] static extern IntPtr SnCreate(IntPtr hwnd,int w,int h,uint rgb,EventProc cb,StringBuilder error,int errorLen);
  [DllImport(Dll)] static extern void SnSetStill(IntPtr r,IntPtr bgra,int w,int h,int stride);
  [DllImport(Dll)] static extern int SnStart(IntPtr r,int waitMs);

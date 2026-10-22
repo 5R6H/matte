@@ -118,6 +118,8 @@ static class MatteTests {
  static void ClearSettings(){foreach(var x in new[]{"",".bak",".bad",".tmp"})if(File.Exists(SettingsFile+x))File.Delete(SettingsFile+x);}
 
  [STAThread] static int Main(string[] args){
+  if(args.Length>=2&&(args[0]=="--native-validate"||args[0]=="--native-fault"))return NativeChild(args);
+  if(args.Contains("--native")){NativeTests();return failures;}
   if(args.Length==3&&args[0]=="--hold-lock"){using(SpatialStoreLock.Acquire(args[1],3000)){Console.WriteLine("LOCKED");Console.Out.Flush();System.Threading.Thread.Sleep(int.Parse(args[2]));}return 0;}
   if(args.Contains("--format")){FormatTests();return failures;}
   if(args.Contains("--locks")){LockTests();return failures;}
@@ -130,7 +132,7 @@ static class MatteTests {
   IdentityTests();if(args.Contains("--identity"))return failures;
   StoreTests();
   LockTests();
-  CatalogTests();FormatTests();AttachTests();CacheTests();RetentionTests();StorePageTests();
+  CatalogTests();NativeTests();AttachTests();CacheTests();RetentionTests();StorePageTests();
   // ② the store page's sweep runs once, not again and again
   Run("2 store page sweeps once",()=>{
    string photos=Fresh("store-photos");for(int i=0;i<3;i++)Solid(Path.Combine(photos,"p"+i+".jpg"),Color.FromArgb(40*i,90,140),64,48,1);
@@ -957,7 +959,7 @@ exit 0
  }}
  sealed class FormatStream:Stream {
   readonly MemoryStream inner;readonly long length,readLimit;internal long ReadBytes,MaxRead;internal bool ThrowOnRead;
-  internal FormatStream(byte[] data,long fakeLength=-1,long limit=-1){inner=new MemoryStream(data,false);length=fakeLength<0?data.Length:fakeLength;readLimit=limit<0?data.Length*2L+128:limit;}
+  internal FormatStream(byte[] data,long fakeLength=-1,long limit=-1){if(nativeCorpus!=null&&fakeLength<0)nativeCorpus.Add((byte[])data.Clone());inner=new MemoryStream(data,false);length=fakeLength<0?data.Length:fakeLength;readLimit=limit<0?data.Length*2L+128:limit;}
   public override bool CanRead{get{return true;}}public override bool CanSeek{get{return true;}}public override bool CanWrite{get{return false;}}
   public override long Length{get{return length;}}public override long Position{get{return inner.Position;}set{inner.Position=value;}}
   public override int Read(byte[] buffer,int offset,int count){Check(!ThrowOnRead,"cap ran after hashing/reading");MaxRead=Math.Max(MaxRead,count);int got=inner.Read(buffer,offset,count);ReadBytes+=got;Check(ReadBytes<=readLimit,"read work budget exceeded");return got;}
@@ -976,11 +978,11 @@ exit 0
    string root=Fresh("format-fixture");File.WriteAllBytes(Path.Combine(root,"tiny.spatial"),SpatialFixture());Console.WriteLine("INFO  no checked-in SHARP fixture; generated exporter-layout fixture with real JPEGs (owner spatial/pictures untouched)");
   });
   Run("T3a compatible boundary values and empty slices",()=>{
-   foreach(int block in new[]{1,256}){var b=SpatialFixture(1,1,1,block);FormatFloat(b,36,0);FormatUInt(b,24,(uint)Math.Max(16,block));FormatUInt(b,28,(uint)Math.Max(16,block));FormatJpegSize(b,true,Math.Max(16,block),Math.Max(16,block));FormatJpegSize(b,false,Math.Max(16,block),Math.Max(16,block));string why;using(var stream=new MemoryStream(b))Check(SpatialFormat.Validate(stream,out why),why);}
+   foreach(int block in new[]{1,256}){var b=SpatialFixture(1,1,1,block);FormatFloat(b,36,0);FormatUInt(b,24,(uint)Math.Max(16,block));FormatUInt(b,28,(uint)Math.Max(16,block));FormatJpegSize(b,true,Math.Max(16,block),Math.Max(16,block));FormatJpegSize(b,false,Math.Max(16,block),Math.Max(16,block));string why;using(var stream=new FormatStream(b))Check(SpatialFormat.Validate(stream,out why),why);}
    var max=SpatialFixture(1,64,64,256);FormatUInt(max,24,8192);FormatUInt(max,28,8192);FormatUInt(max,60,16384);FormatUInt(max,64,16384);FormatJpegSize(max,true,8192,8192);FormatJpegSize(max,false,8192,8192);string reason;
-   using(var stream=new MemoryStream(max))Check(SpatialFormat.Validate(stream,out reason),reason);
+   using(var stream=new FormatStream(max))Check(SpatialFormat.Validate(stream,out reason),reason);
    var two=SpatialFixture(2);var empty=two.Take(68).Concat(new byte[10]).Concat(two.Skip(96)).ToArray();FormatUInt(empty,40,4);FormatUInt(empty,44,1);FormatUInt(empty,48,38);
-   using(var stream=new MemoryStream(empty))Check(SpatialFormat.Validate(stream,out reason),reason);
+   using(var stream=new FormatStream(empty))Check(SpatialFormat.Validate(stream,out reason),reason);
   });
   Run("T3a header ranges and aggregate budgets",()=>{
    FormatBad(new byte[68],"not a Spatial");
@@ -1023,7 +1025,7 @@ exit 0
   Run("T3a finite depths focal padding and derived projections",()=>{
    foreach(int at in new[]{20,77,81,85,89})foreach(float value in new[]{0f,-1f,float.NaN,float.PositiveInfinity,float.NegativeInfinity}){var b=SpatialFixture();FormatFloat(b,at,value);FormatBad(b,at==20?"focal must":"depth must");}
    foreach(float value in new[]{-1f,8.01f,float.NaN,float.PositiveInfinity,float.NegativeInfinity,float.MaxValue}){var b=SpatialFixture();FormatFloat(b,36,value);FormatBad(b,"uvPadding");}
-   foreach(float value in new[]{0f,8f}){var b=SpatialFixture();FormatFloat(b,36,value);string why;using(var stream=new MemoryStream(b))Check(SpatialFormat.Validate(stream,out why),why);}
+   foreach(float value in new[]{0f,8f}){var b=SpatialFixture();FormatFloat(b,36,value);string why;using(var stream=new FormatStream(b))Check(SpatialFormat.Validate(stream,out why),why);}
    var extreme=SpatialFixture();FormatFloat(extreme,20,float.Epsilon);FormatBad(extreme,"mesh projection");
    extreme=SpatialFixture();FormatFloat(extreme,77,float.MaxValue);FormatBad(extreme,"mesh projection");
    extreme=SpatialFixture();for(int at=77;at<=89;at+=4)FormatFloat(extreme,at,1e20f);FormatBad(extreme,"camera projection");
@@ -1048,7 +1050,7 @@ exit 0
     b=SpatialFixture();int sof=FormatSof(b,offset);b[sof+1]=196;FormatBad(b,name+" JPEG SOF missing");
     b=SpatialFixture();b[sof+3]=7;FormatBad(b,name+" JPEG SOF truncated");
     b=SpatialFixture();b[sof+9]=0;FormatBad(b,name+" JPEG SOF layout");
-    b=SpatialFixture();b[sof+1]=194;string why;using(var stream=new MemoryStream(b))Check(SpatialFormat.Validate(stream,out why),"SOF2 header rejected: "+why);
+    b=SpatialFixture();b[sof+1]=194;string why;using(var stream=new FormatStream(b))Check(SpatialFormat.Validate(stream,out why),"SOF2 header rejected: "+why);
    }
   });
   Run("T3a cap before hash and parsing (counting stream and sparse file)",()=>{
@@ -1079,6 +1081,73 @@ exit 0
  }
  static int FormatSof(byte[] b,int start){int p=start+2;while(p<b.Length){Check(b[p]==255,"bad test JPEG");int m=b[p+1];if(m>=192&&m<=207&&m!=196&&m!=200&&m!=204)return p;p+=2+(b[p+2]<<8)+b[p+3];}throw new Exception("fixture has no SOF");}
  static void FormatJpegSize(byte[] b,bool color,int width,int height){int start=68+(int)BitConverter.ToUInt32(b,48)+(color?0:(int)BitConverter.ToUInt32(b,52)),p=FormatSof(b,start);b[p+5]=(byte)(height>>8);b[p+6]=(byte)height;b[p+7]=(byte)(width>>8);b[p+8]=(byte)width;}
+ static List<byte[]> nativeCorpus;
+ [System.Runtime.InteropServices.DllImport("kernel32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode,SetLastError=true)] static extern IntPtr LoadLibraryW(string path);
+ [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern uint SetErrorMode(uint mode);
+ static string NativeDll{get{return Environment.GetEnvironmentVariable("MATTE_TEST_NATIVE_DLL")??Path.GetFullPath(Path.Combine(Here,"..","..","build","SpatialNative.dll"));}}
+ static void LoadNative(){Check(LoadLibraryW(NativeDll)!=IntPtr.Zero,"cannot load "+NativeDll+": "+System.Runtime.InteropServices.Marshal.GetLastWin32Error());}
+ static int NativeChild(string[] args){
+  SetErrorMode(1|2|0x8000); // A deliberately crashing mutant must exit, never open Windows Error Reporting UI.
+  try{LoadNative();string path=args[1];var error=new System.Text.StringBuilder(512);
+   if(args[0]=="--native-fault"){
+    int fault=int.Parse(args[2]),expected=int.Parse(args[3]),expectedReason=int.Parse(args[4]),eventKind=0,eventSequence=0;NativeSpatial.FailureReason reason;
+    NativeSpatial.EventProc callback=(kind,seq)=>{eventKind=kind;eventSequence=seq;};
+    int count=fault==2?33:1;int before=0;
+    for(int i=0;i<count;i++){
+     int kind=NativeSpatial.SnTestLoader(path,fault,callback,out reason,error,error.Capacity);
+     Check(kind==expected&&(int)reason==expectedReason,"fault "+fault+": kind="+kind+", reason="+reason+", "+error);
+     Check(eventKind==expected&&eventSequence==1,"classified event was not emitted for current sequence");
+     if(fault==2){using(var file=new FileStream(path,FileMode.Open,FileAccess.ReadWrite,FileShare.None)){}using(var process=System.Diagnostics.Process.GetCurrentProcess()){if(i==0)before=process.HandleCount;else if(i==count-1)Check(process.HandleCount<=before+2,"file/worker handles leaked after exception");}}
+    }GC.KeepAlive(callback);Console.WriteLine("FAULT OK "+fault);return 0;
+   }
+   string why;bool managed;using(var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read))managed=SpatialFormat.Validate(file,out why);
+   int structure=NativeSpatial.SnValidateStructure(path,error,error.Capacity);Check(structure==(managed?0:NativeSpatial.LoadError),"structural parity: managed="+managed+" ("+why+"), native="+structure+" ("+error+")");
+   int decoded=NativeSpatial.SnValidate(path,error,error.Capacity);
+   Check(decoded==0||decoded==NativeSpatial.LoadError,"unexpected native runtime error: "+error);Check(managed||decoded==NativeSpatial.LoadError,"native accepted managed-invalid input");
+   Console.WriteLine("RESULT "+structure+" "+decoded+" "+error);return 0;
+  }catch(Exception e){Console.WriteLine("CHILD FAIL "+e.Message);return 1;}
+ }
+ static string NativeProcess(string arguments,int timeout=15000){
+  var start=new System.Diagnostics.ProcessStartInfo(Assembly.GetExecutingAssembly().Location,arguments){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};start.EnvironmentVariables["MATTE_TEST_NATIVE_DLL"]=NativeDll;
+  using(var child=System.Diagnostics.Process.Start(start)){
+   var output=child.StandardOutput.ReadToEndAsync();var error=child.StandardError.ReadToEndAsync();
+   if(!child.WaitForExit(timeout)){child.Kill();child.WaitForExit(5000);throw new Exception("native child timed out: "+arguments);}
+   string text=output.Result+error.Result;Check(child.ExitCode==0,"native child exit "+child.ExitCode+": "+arguments+"\n"+text);return text;
+  }
+ }
+ static void NativeTests(){
+  bool available=File.Exists(NativeDll),required=Environment.GetEnvironmentVariable("MATTE_REQUIRE_NATIVE")=="1";
+  nativeCorpus=available?new List<byte[]>():null;try{FormatTests();}finally{if(!available)nativeCorpus=null;}
+  if(!available){if(required)Run("T3b required native DLL",()=>Check(false,"required DLL missing: "+NativeDll));else Console.WriteLine("SKIP T3b native validation: "+NativeDll+" missing");return;}
+  var corpus=nativeCorpus;nativeCorpus=null;
+  Run("T3b all native limits equal managed constants",()=>{
+   LoadNative();long[] expected={SpatialFormat.MaxFileBytes,SpatialFormat.MaxDenseSlots,SpatialFormat.MaxBlocks,SpatialFormat.MaxVertices,SpatialFormat.MaxIndices,SpatialFormat.MaxMeshBytes,SpatialFormat.MaxAtlasPixels,SpatialFormat.MaxValidationBytes,SpatialFormat.MaxSlices,SpatialFormat.MaxBlockSize,SpatialFormat.MaxDimension,SpatialFormat.HeaderBytes};
+   var actual=new long[expected.Length];Check(NativeSpatial.SnLimits(actual,actual.Length)==expected.Length&&actual.SequenceEqual(expected),"native/managed limits differ");
+  });
+  string root=Fresh("native-corpus");
+  Run("T3b T3a corpus and all 4000 seeded cases in timed child processes",()=>{
+   Check(corpus.Count>=4000,"T3a corpus was not captured");var problems=new System.Collections.Concurrent.ConcurrentQueue<string>();int done=0,decodedRejects=0;
+   System.Threading.Tasks.Parallel.For(0,corpus.Count,new System.Threading.Tasks.ParallelOptions{MaxDegreeOfParallelism=4},i=>{
+    string path=Path.Combine(root,i.ToString("D5")+".spatial");File.WriteAllBytes(path,corpus[i]);
+    try{string result=NativeProcess("--native-validate \""+path+"\"");if(result.StartsWith("RESULT 0 3 "))System.Threading.Interlocked.Increment(ref decodedRejects);}catch(Exception e){problems.Enqueue(e.Message);}
+    int n=System.Threading.Interlocked.Increment(ref done);if(n%250==0)Console.WriteLine("INFO  native children "+n+"/"+corpus.Count);
+   });
+   Console.WriteLine("INFO  native corpus "+corpus.Count+", WIC-only content rejections "+decodedRejects);Check(problems.IsEmpty,string.Join("\n",problems.Take(12)));
+  });
+  Run("T3b actual JPEG decode succeeds and damaged payload is content",()=>{
+   string valid=Path.Combine(root,"valid.spatial");File.WriteAllBytes(valid,SpatialFixture());Check(NativeProcess("--native-validate \""+valid+"\"").StartsWith("RESULT 0 0 "),"valid JPEG did not decode");
+   var b=SpatialFixture();int sof=FormatSof(b,96),end=sof+2+(b[sof+2]<<8)+b[sof+3];
+   // Keep SOI/SOF and all section sizes valid but remove the scan/tables after SOF.
+   for(int i=end;i<96+formatJpeg.Length;i++)b[i]=0;
+   string damaged=Path.Combine(root,"bad-payload.spatial");File.WriteAllBytes(damaged,b);Check(NativeProcess("--native-validate \""+damaged+"\"").StartsWith("RESULT 0 3 "),"undecodable JPEG was not a content failure");
+   string cap=Directory.GetFiles(Path.Combine(Here,"t-format-cap","store"),"*.spatial",SearchOption.AllDirectories).Single();Check(NativeProcess("--native-validate \""+cap+"\"").StartsWith("RESULT 3 3 "),"oversized sparse file not rejected");
+  });
+  Run("T3b LoaderRun classifies exceptions, releases handles, checks WIC sizes",()=>{
+   string valid=Path.Combine(root,"fault-valid.spatial"),hostile=Path.Combine(root,"fault-hostile.spatial");File.WriteAllBytes(valid,SpatialFixture());var b=SpatialFixture();FormatUInt(b,12,uint.MaxValue);File.WriteAllBytes(hostile,b);
+   foreach(var test in new[]{new[]{1,5,103},new[]{2,5,103},new[]{3,3,1},new[]{4,5,104},new[]{5,5,107},new[]{6,5,105},new[]{7,5,106},new[]{8,3,4},new[]{9,5,102}}){string path=test[0]==2||test[0]==3?hostile:valid;NativeProcess("--native-fault \""+path+"\" "+test[0]+" "+test[1]+" "+test[2]);}
+   NativeProcess("--native-fault \""+Path.Combine(root,"missing.spatial")+"\" 0 5 101");
+  });
+ }
  static void AttachTests(){
   Run("T2c2 stale source stays flat and heals hint",()=>{
    string root=Fresh("a-stale"),photo=Path.Combine(root,"photo.bmp"),store=Path.Combine(root,"store");Bmp(photo,Color.Red);string artifact=CatalogPair(store,photo);

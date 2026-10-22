@@ -3,7 +3,7 @@
 # They have to stay together; Matte keeps its settings and caches in the folder its exe is in.
 # Needs Windows 10/11, the .NET Framework 4.8 compiler that comes with Windows, and Visual Studio (or its Build Tools)
 # with the C++ workload, found with vswhere; -VcVars points at a vcvars64.bat directly instead.
-param([string]$VcVars='')
+param([string]$VcVars='',[switch]$NativeOnly)
 $ErrorActionPreference='Stop'
 Set-Location $PSScriptRoot
 if(!$VcVars){
@@ -15,6 +15,7 @@ if(!(Test-Path build\obj)){New-Item -ItemType Directory build\obj | Out-Null}
 # vcvars' own warnings go nowhere: on stderr they would stop this script
 cmd /d /c "call `"$VcVars`" >nul 2>nul && cl /nologo /LD /O2 /EHsc /MT /std:c++17 /W3 /utf-8 /Fobuild\obj\ /Febuild\SpatialNative.dll native\SpatialNative.cpp /link /NOLOGO >build\obj\cl.log"
 if($LASTEXITCODE -ne 0){Get-Content build\obj\cl.log; throw "cl (SpatialNative) failed"}
+if($NativeOnly){return}
 cmd /d /c "call `"$VcVars`" >nul 2>nul && cl /nologo /LD /O2 /EHsc /MT /std:c++20 /W3 /utf-8 /Fobuild\obj\ /Febuild\SpatialSlice.dll native\SpatialSlice.cpp /link /NOLOGO >build\obj\cl-slice.log"
 if($LASTEXITCODE -ne 0){Get-Content build\obj\cl-slice.log; throw "cl (SpatialSlice) failed"}
 if(Test-Path build\spatial){Remove-Item build\spatial -Recurse -Force}
