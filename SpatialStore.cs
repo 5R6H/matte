@@ -7,11 +7,9 @@ using System.Windows;
 using System.Windows.Controls;
 
 // 存储与清理 (from the Spatial page): where the Spatial pictures are kept, and how they are kept tidy.
-// They live in spatial\pictures next to the exe (or where they were moved to). Tidying is automatic
-// (SpatialIndex): a renamed or moved photo gets its picture back, a photo on a disk that is not plugged in keeps its
-// picture, and a picture whose photo is truly gone goes to the Recycle Bin after 30 days. The sweep runs a minute after
-// Matte starts, every six hours, after each generation and when this page opens - never while pictures are being made
-// or the store is being moved.
+// They live in spatial\pictures next to the exe (or where they were moved to). Legacy inventory never renames or
+// deletes pictures. The sweep runs a minute after Matte starts, every six hours, after each generation and when this
+// page opens - never while pictures are being made or the store is being moved.
 partial class App {
  class StoreInfo{public string Dir;public int Files;public long Bytes;}
  StoreInfo storeInfo;int storeGeneration;System.Windows.Threading.DispatcherTimer storeDisarm;
@@ -43,7 +41,7 @@ partial class App {
   P<TextBlock>("StoreDefaultPath").Text=DefaultSpatialCacheDir.Replace(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"%LOCALAPPDATA%");
   PaintSweep();PaintStoreSharp();
  }
- // ---- automatic tidying (SpatialIndex.Sweep), off the UI thread
+ // ---- legacy inventory (SpatialIndex.Sweep), off the UI thread
  int sweepsStarted;   // how many sweeps this run has started (the regression test for the loop counts them)
  bool sweeping;DateTime lastSweep=DateTime.Now.AddHours(-6).AddMinutes(1);SpatialIndex.Result sweepResult;
  void RunSpatialSweep(){
@@ -52,27 +50,24 @@ partial class App {
   var dispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;
   Task.Run(()=>{
    var photos=new List<string>(SourceImages());
-   return SpatialIndex.Sweep(SpatialCacheDir,photos.Distinct(StringComparer.OrdinalIgnoreCase),Log,RecycleMany,DateTime.Now);
+   return SpatialIndex.Sweep(SpatialCacheDir,photos.Distinct(StringComparer.OrdinalIgnoreCase),Log,DateTime.Now);
   }).ContinueWith(t=>dispatcher.BeginInvoke(new Action(()=>{
    sweeping=false;
    if(t.Exception!=null){Log("Spatial sweep: "+t.Exception.InnerException.Message);return;}if(t.Result==null)return;
-   sweepResult=t.Result;var r=t.Result;
-   if(r.Reattached>0||r.Cleaned>0){Log("Spatial sweep: "+r.Reattached+" re-attached, "+r.Cleaned+" cleared");try{LoadSpatialCatalog();if(spatialEnabled)RebuildSlides();}catch(Exception e){Log("After sweep: "+e.Message);}}
+   sweepResult=t.Result;
    if(panel!=null&&PanelOpen){if(page=="spatialstore")RefreshStoreView();PaintSweep();}
   })));
  }
  void PaintSweep(){
   if(panel==null)return;var r=sweepResult;
-  string head="改名或换文件夹的照片会自动接上 · 原图删除 "+SpatialIndex.MissingDays+" 天后，它的 Spatial 图片自动移到回收站";
+  string head="Spatial 图片不会自动删除 · 原图找不到时，图片仍保留，由你决定何时清理";
   if(r==null){P<TextBlock>("StoreAutoInfo").Text=head;return;}
   var parts=new List<string>();
-  if(r.Reattached>0)parts.Add("接上了 "+r.Reattached+" 张");
-  if(r.Cleaned>0)parts.Add("清理了 "+r.Cleaned+" 张");
-  if(r.Missing>0)parts.Add(r.Missing+" 张原图不在了，等待中（"+SizeText(r.MissingBytes).Replace("约 ","")+"）");
+  if(r.Missing>0)parts.Add(r.Missing+" 张原图找不到，图片已保留（"+SizeText(r.MissingBytes).Replace("约 ","")+"）");
   if(r.Offline>0)parts.Add(r.Offline+" 张的原图在未连接的磁盘上，保留");
   P<TextBlock>("StoreAutoInfo").Text=head+"\n上次检查 "+r.When.ToString("HH:mm")+(parts.Count>0?" · "+string.Join(" · ",parts):" · 一切对应正常");
  }
- // many files to the Recycle Bin in one go (silently: the button asked already, or the 30 days passed)
+ // many files to the Recycle Bin in one go (silently: the owner confirmed with the button)
  static void RecycleMany(List<string> files){
   for(int i=0;i<files.Count;i+=200){var part=files.Skip(i).Take(200).ToList();if(part.Count==0)break;
    var op=new SHFILEOPSTRUCT{wFunc=3,pFrom=string.Join("\0",part)+"\0\0",fFlags=(ushort)(0x40|0x10|0x4|0x400)};
@@ -109,7 +104,7 @@ partial class App {
     if(t.Exception!=null){string why=t.Exception.InnerException.Message;Log("Spatial store move: "+why);StoreMoveNote("没有移动："+why,-1);}
     else{var r=t.Result;settings.SpatialStoreTarget=r.Target;if(settings.SpatialStoreOld==null)settings.SpatialStoreOld=new List<string>();
      if(r.Backup!=null&&!settings.SpatialStoreOld.Contains(r.Backup))settings.SpatialStoreOld.Add(r.Backup);
-     // the old copy's working folders are the generator's: they need not survive, but stay with the copy until it is cleared
+     // The complete old tree stays until the owner explicitly clears this backup.
      SaveSettings();try{LoadSpatialCatalog();}catch{}StoreMoveNote(back?"已移回默认位置":"已移到新位置 · 旧位置的副本保留在下面",-1);}
     RefreshStore();})));
  }

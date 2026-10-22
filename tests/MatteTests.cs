@@ -81,7 +81,9 @@ static class MatteTests {
  static void ClearSettings(){foreach(var x in new[]{"",".bak",".bad",".tmp"})if(File.Exists(SettingsFile+x))File.Delete(SettingsFile+x);}
 
  [STAThread] static int Main(string[] args){
+  if(args.Contains("--store")){StoreTests();return failures;}
   IdentityTests();if(args.Contains("--identity"))return failures;
+  StoreTests();
   // ② the store page's sweep runs once, not again and again
   Run("2 store page sweeps once",()=>{
    string photos=Fresh("store-photos");for(int i=0;i<3;i++)Solid(Path.Combine(photos,"p"+i+".jpg"),Color.FromArgb(40*i,90,140),64,48,1);
@@ -528,6 +530,96 @@ exit 0
   b.Save(path,jpeg,q);
  }
  static bool Near(uint a,uint b,int tol){for(int k=0;k<3;k++){int x=(int)((a>>(8*k))&255),y=(int)((b>>(8*k))&255);if(Math.Abs(x-y)>tol)return false;}return true;}
+ static void StoreFile(string root,string relative,byte[] bytes){string path=Path.Combine(root,relative);Directory.CreateDirectory(Path.GetDirectoryName(path));File.WriteAllBytes(path,bytes);}
+ static void LegacyIndex(string store,string stem,string path,string since){
+  // Old-install fixture: includes the retired fingerprint/photo cache and an unknown field. SHA-1 sampled
+  // fingerprint of little-endian Int64(10) + UTF-8("photo-data"), computed independently with Python hashlib.
+  var record=new{path=path,fp="3659A5663A5A096918E8",missingSince=since,unknown="ignored"};
+  var index=new{version=1,pictures=new Dictionary<string,object>{{stem,record}},photos=new Dictionary<string,object>{{path,new{size=10,ticks=0,fp=record.fp}}},unknown=42};
+  File.WriteAllText(Path.Combine(store,"spatial-index.json"),new JavaScriptSerializer().Serialize(index));
+ }
+ static Dictionary<string,byte[]> MoveFixture(string store){
+  var expected=new Dictionary<string,byte[]>{{"old.spatial",new byte[]{1,2,3}},{"spatial-index.json",new byte[]{4,5}},
+   {@"v1\a\b.spatial",new byte[]{6,7,8,9}},{@"v1\a\b.spatial.json",new byte[]{10,11,12}},
+   {@"v1\quarantine\x",new byte[]{13,14,15,16,17}},{@"work\nested\proxy.bin",new byte[]{18,19,20,21,22,23}}};
+  foreach(var f in expected)StoreFile(store,f.Key,f.Value);
+  StoreFile(store,"old.spatial.tmp-123",new byte[27]);StoreFile(store,@"v1\a\b.spatial.json.tmp-456",new byte[29]);StoreFile(store,@"v1\.lock",new byte[31]);
+  return expected;
+ }
+ static void CheckMoved(string store,Dictionary<string,byte[]> expected){
+  foreach(var f in expected){string path=Path.Combine(store,f.Key);Check(File.Exists(path),"missing relative path "+f.Key);Check(File.ReadAllBytes(path).SequenceEqual(f.Value),"changed bytes "+f.Key);}
+  Check(Directory.GetFiles(store,"*",SearchOption.AllDirectories).Length==expected.Count,"temporary/lock file copied or extra file present");
+ }
+ // A failed mutant can leave the default path as a junction. Remove that link alone before Fresh can recurse.
+ static void RemoveTestJunction(string path){if(SpatialStoreMove.IsJunction(path))Directory.Delete(path);}
+ static void StoreTests(){
+  Run("T2p sweep retains renamed legacy picture",()=>{
+   string root=Fresh("p-rename"),store=Path.Combine(root,"store"),photos=Path.Combine(root,"photos");Directory.CreateDirectory(store);Directory.CreateDirectory(photos);
+   string old=Path.Combine(photos,"old.jpg"),renamed=Path.Combine(photos,"new.jpg"),picture=Path.Combine(store,"old.spatial");
+   File.WriteAllText(old,"photo-data");File.WriteAllBytes(picture,new byte[]{1,2,3});LegacyIndex(store,"old",old,null);File.Move(old,renamed);
+   var r=SpatialIndex.Sweep(store,new[]{renamed},s=>{},new DateTime(2026,10,22));
+   Check(File.Exists(picture)&&!File.Exists(Path.Combine(store,"new.spatial")),"legacy picture was renamed");
+   Check(File.ReadAllBytes(picture).SequenceEqual(new byte[]{1,2,3}),"legacy bytes changed");Check(r.Missing==1&&r.MissingBytes==3&&r.InUse==0,"renamed-photo inventory");
+  });
+  Run("T2p sweep retains legacy after 30 days",()=>{
+   string store=Fresh("p-missing"),picture=Path.Combine(store,"gone.spatial");File.WriteAllBytes(picture,new byte[]{1,2,3,4});
+   var now=new DateTime(2026,10,22,0,0,0,DateTimeKind.Utc);LegacyIndex(store,"gone",Path.Combine(store,"gone.jpg"),now.AddDays(-31).ToString("o"));
+   foreach(var when in new[]{now,now.AddYears(3)}){var r=SpatialIndex.Sweep(store,new string[0],s=>{},when);
+    Check(File.Exists(picture),"legacy picture was recycled after 30 days");Check(r.Missing==1&&r.MissingBytes==4&&r.InUse==0&&r.Offline==0,"missing legacy inventory");}
+  });
+  Run("T2p sweep never counts or touches v1",()=>{
+   string store=Fresh("p-v1");StoreFile(store,@"v1\a\b.spatial",new byte[]{1,2,3});StoreFile(store,@"v1\a\b.spatial.json",new byte[]{4,5});StoreFile(store,@"v1\retention.json",new byte[]{6});
+   var before=Directory.GetFiles(Path.Combine(store,"v1"),"*",SearchOption.AllDirectories).ToDictionary(p=>p,p=>File.ReadAllBytes(p));
+   var times=before.Keys.ToDictionary(p=>p,p=>File.GetLastWriteTimeUtc(p));
+   var r=SpatialIndex.Sweep(store,new string[0],s=>{},new DateTime(2030,1,1));
+   Check(r.InUse==0&&r.Missing==0&&r.Offline==0&&r.MissingBytes==0,"v1 counted by legacy sweep");
+   Check(Directory.GetFiles(Path.Combine(store,"v1"),"*",SearchOption.AllDirectories).Length==before.Count,"v1 tree changed");
+   foreach(var f in before)Check(File.Exists(f.Key)&&File.ReadAllBytes(f.Key).SequenceEqual(f.Value)&&File.GetLastWriteTimeUtc(f.Key)==times[f.Key],"v1 touched");
+   var idx=new JavaScriptSerializer().Deserialize<SpatialIndex.Index>(File.ReadAllText(Path.Combine(store,"spatial-index.json")));Check(idx.version==1&&idx.pictures.Count==0,"v1 entered legacy index");
+  });
+  Run("T2p sweep inventories last path and offline legacy",()=>{
+   string store=Fresh("p-status"),photo=Path.Combine(store,"renamed.jpg");File.WriteAllText(photo,"photo-data");File.WriteAllBytes(Path.Combine(store,"old.spatial"),new byte[]{1});
+   LegacyIndex(store,"old",photo,"2020-01-01T00:00:00Z");
+   var r=SpatialIndex.Sweep(store,new string[0],s=>{},DateTime.UtcNow);Check(r.InUse==1&&r.Missing==0,"existing last path not counted");
+   string offline=Enumerable.Range('A',26).Select(c=>((char)c)+@":\").First(p=>!Directory.Exists(p));
+   File.SetAttributes(Path.Combine(store,"spatial-index.json"),FileAttributes.Normal);LegacyIndex(store,"old",offline+@"photos\old.jpg","2020-01-01T00:00:00Z");
+   r=SpatialIndex.Sweep(store,new string[0],s=>{},DateTime.UtcNow);Check(r.Offline==1&&r.Missing==0&&File.Exists(Path.Combine(store,"old.spatial")),"offline picture not retained");
+  });
+  Run("T2p move carries tree and excludes publication files",()=>{
+   string root=Fresh("p-move"),original=Path.Combine(root,"old"),dest=Path.Combine(root,"new"),third=Path.Combine(root,"third");var expected=MoveFixture(original);var progress=new List<double>();
+   try{
+    var result=SpatialStoreMove.Move(original,null,dest,p=>progress.Add(p),s=>{});
+    CheckMoved(dest,expected);CheckMoved(original,expected);Check(SpatialStoreMove.IsJunction(original),"default path not switched");
+    Check(result.Target==dest&&Directory.Exists(result.Backup),"move result or backup missing");
+    Check(File.Exists(Path.Combine(result.Backup,@"v1\a\b.spatial.json.tmp-456")),"old temporary removed");
+    long total=expected.Values.Sum(b=>(long)b.Length);long[] sizes=expected.Values.Select(b=>(long)b.Length).OrderBy(n=>n).ToArray();
+    double previous=0;var reported=new List<long>();foreach(double p in progress){Check(p>=previous&&p<=1,"non-monotonic progress");reported.Add((long)Math.Round((p-previous)*total));previous=p;}
+    Check(progress.Count==expected.Count&&previous==1&&reported.OrderBy(n=>n).SequenceEqual(sizes),"progress did not count bytes across the whole tree");
+    var second=SpatialStoreMove.Move(original,dest,third,null,s=>{});Check(second.Target==third&&second.Backup==dest,"junction-to-junction move result");CheckMoved(original,expected);
+    var back=SpatialStoreMove.Move(original,third,original,null,s=>{});Check(back.Target==null&&back.Backup==third&&!SpatialStoreMove.IsJunction(original),"move back result");CheckMoved(original,expected);
+   }finally{RemoveTestJunction(original);}
+  });
+  foreach(string ext in new[]{".spatial",".spatial.json"}){string suffix=ext;Run("T2p move rejects same-size corruption "+suffix,()=>{
+   string root=Fresh(suffix==".spatial"?"p-hash":"p-json"),original=Path.Combine(root,"old"),dest=Path.Combine(root,"new");var expected=MoveFixture(original);bool failed=false,hook=false;
+   try{
+    SpatialStoreMove.BeforeVerify=stage=>{hook=true;string p=Path.Combine(stage,@"v1\a\b"+suffix);byte[] b=File.ReadAllBytes(p);b[0]^=1;File.WriteAllBytes(p,b);};
+    try{SpatialStoreMove.Move(original,null,dest,null,s=>{});}catch(IOException){failed=true;}
+    Check(hook,"corruption hook not reached");Check(failed,"same-size v1 corruption accepted");
+    Check(!SpatialStoreMove.IsJunction(original)&&!Directory.Exists(dest),"failed move switched location or left staged files");
+    Check(File.ReadAllBytes(Path.Combine(original,@"v1\a\b"+suffix)).SequenceEqual(expected[@"v1\a\b"+suffix]),"source changed");
+    Check(Directory.GetDirectories(root,"old.old-*").Length==0,"old location renamed before verification");
+   }finally{SpatialStoreMove.BeforeVerify=null;RemoveTestJunction(original);}
+  });}
+  Run("T2p copy failure removes stage and preserves current junction",()=>{
+   string root=Fresh("p-copy"),original=Path.Combine(root,"old"),current=Path.Combine(root,"current"),dest=Path.Combine(root,"new");var expected=MoveFixture(original);bool failed=false;
+   try{
+    SpatialStoreMove.Move(original,null,current,null,s=>{});
+    using(var held=new FileStream(Path.Combine(current,@"v1\a\b.spatial"),FileMode.Open,FileAccess.Read,FileShare.None))
+     try{SpatialStoreMove.Move(original,current,dest,null,s=>{});}catch(IOException){failed=true;}
+    Check(failed&&!Directory.Exists(dest),"copy failure left staging or succeeded");Check(SpatialStoreMove.IsJunction(original),"old junction removed on copy failure");CheckMoved(original,expected);CheckMoved(current,expected);
+   }finally{RemoveTestJunction(original);}
+  });
+ }
  static Dictionary<string,object> IdObj(object value){return (Dictionary<string,object>)value;}
  static IEnumerable<Dictionary<string,object>> IdCases(Dictionary<string,object> vectors,string key){return ((List<object>)vectors[key]).Select(IdObj);}
  static void IdReject(Action action,string message){try{action();}catch(FormatException){return;}throw new Exception(message);}
