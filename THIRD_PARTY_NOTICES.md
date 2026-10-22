@@ -20,7 +20,11 @@ Matte does not ship these. They are downloaded onto the user's computer, into `s
 
 | Component | From | License |
 |---|---|---|
-| SHARP model weights (`sharp_2572gikvuh.pt`) | `ml-site.cdn-apple.com` | **Apple Machine Learning Research Model License: non-commercial research use only.** Shown on Matte's panel; downloaded only after the user accepts it. |
+| SHARP model weights (`sharp_2572gikvuh.pt`) | `ml-site.cdn-apple.com` | Apple Machine Learning Research Model License; scope and acceptance described below. |
 | uv 0.12.23 | GitHub releases of astral-sh/uv | MIT or Apache-2.0 |
 | Python 3.12.15 (python-build-standalone) | via uv | Python Software Foundation License |
 | PyTorch, torchvision, timm, NumPy, SciPy, Pillow, plyfile and their dependencies, as locked in `spatial/requirements-*.txt` | PyPI and download.pytorch.org | each under its own license (mostly BSD, MIT, Apache-2.0) |
+
+SHARP's model weights are under the [Apple Machine Learning Research Model License](https://github.com/apple/ml-sharp/blob/main/LICENSE_MODEL), which permits use only for non-commercial research "with the sole intent to advance scientific knowledge" and excludes product development and commercial use. Matte neither ships nor redistributes the weights; it downloads them from Apple onto your computer only after you accept the license. Whether personal wallpaper use falls within those terms is your judgement.
+
+SHARP's code (`spatial/sharp`) is under Apple's sample-code license, kept with its license and notices. Matte is not affiliated with or endorsed by Apple.

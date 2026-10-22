@@ -42,11 +42,25 @@ partial class App {
  internal string TestStartGeneration(){return StartGeneration();}
  internal void TestSweepAge(double hours){lastSweep=DateTime.Now.AddHours(-hours);}
  internal void TestSweep(bool after=false){RunSpatialSweep(after);}
+ internal void TestStoreView(SpatialCatalog c,SpatialRetention.Result r){if(panel==null)CreatePanel();catalogLoading=true;storeInfo=new StoreInfo{Dir=SpatialCacheDir,Catalog=c,Files=c.Valid+c.Legacy,Bytes=c.Bytes};lastSweepStore=SpatialCacheDir;retentionResult=r;PaintStore();}
+ internal string TestText(string name){return P<System.Windows.Controls.TextBlock>(name).Text;}
+ internal bool TestVisible(string name){return P<System.Windows.FrameworkElement>(name).Visibility==System.Windows.Visibility.Visible;}
+ internal void TestClick(string name){P<System.Windows.Controls.Button>(name).RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));}
+ internal bool TestLegacyCleaning{get{return legacyCleaning;}}
+ internal bool TestLegacyArmed{get{return legacyArmed;}}
+ internal void TestMoveTo(string dest){MoveStoreTo(false,dest);}
+ internal bool TestMoving{get{return storeMoving;}}
+ internal bool TestLicence(bool agreed){if(panel==null)CreatePanel();sharpAgreed=agreed;sharpView="license";PaintSharp();return P<System.Windows.Controls.Button>("SharpRightBtn").IsEnabled;}
+ internal void TestRenderPage(string name,string path,int height){var v=P<System.Windows.FrameworkElement>(name);var parent=System.Windows.Media.VisualTreeHelper.GetParent(v) as System.Windows.Controls.Panel;parent.Children.Remove(v);v.Visibility=System.Windows.Visibility.Visible;v.Opacity=1;v.RenderTransform=new System.Windows.Media.TranslateTransform();
+  var frame=new System.Windows.Controls.Border{Width=320,Height=height,Background=new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(35,38,42)),Resources=panel.Resources,Child=v};System.Windows.Documents.TextElement.SetForeground(frame,panel.Foreground);System.Windows.Documents.TextElement.SetFontFamily(frame,panel.FontFamily);System.Windows.Documents.TextElement.SetFontSize(frame,panel.FontSize);frame.Measure(new System.Windows.Size(320,height));frame.Arrange(new System.Windows.Rect(0,0,320,height));frame.UpdateLayout();
+  var image=new System.Windows.Media.Imaging.RenderTargetBitmap(640,height*2,192,192,System.Windows.Media.PixelFormats.Pbgra32);image.Render(frame);var png=new System.Windows.Media.Imaging.PngBitmapEncoder();png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(image));using(var f=File.Create(path))png.Save(f);
+  frame.Child=null;parent.Children.Add(v);
+ }
  internal void TestOpenStore(){
   ui=new MessageWindow();CreatePanel();panel.ShowActivated=false;panel.ShowInTaskbar=false;panel.Left=-20000;panel.Top=-20000;panel.Show();
   page="spatialstore";RefreshStore();
  }
- internal void TestClose(){genQueued=false;if(sweepCancel!=null)sweepCancel.Cancel();CancelSlideRequests();ReleaseDisplayPins();PinWallpaper(null);System.Threading.Interlocked.Increment(ref catalogRequest);if(panel!=null)panel.Close();if(ui!=null)ui.Dispose();}
+ internal void TestClose(){if(legacyDisarm!=null)legacyDisarm.Stop();genQueued=false;if(sweepCancel!=null)sweepCancel.Cancel();CancelSlideRequests();ReleaseDisplayPins();PinWallpaper(null);System.Threading.Interlocked.Increment(ref catalogRequest);if(panel!=null)panel.Close();if(ui!=null)ui.Dispose();}
  internal void TestCatalog(SpatialCatalog catalog,params string[] photos){ApplySpatialCatalog(catalog,photos.Select(p=>Tuple.Create(p,new List<string>{p})).ToList(),true);}
  internal string TestSpatialPath(string path){return SpatialPathFor(path);}
  internal int TestSpatialSlides{get{return spatialSlides.Count;}}
@@ -111,10 +125,11 @@ static class MatteTests {
   if(args.Contains("--attach")){AttachTests();CacheTests();return failures;}
   if(args.Contains("--cache")){CacheTests();return failures;}
   if(args.Contains("--retention")){RetentionTests();return failures;}
+  if(args.Contains("--store-page")){StorePageTests();return failures;}
   IdentityTests();if(args.Contains("--identity"))return failures;
   StoreTests();
   LockTests();
-  CatalogTests();AttachTests();CacheTests();RetentionTests();
+  CatalogTests();AttachTests();CacheTests();RetentionTests();StorePageTests();
   // ② the store page's sweep runs once, not again and again
   Run("2 store page sweeps once",()=>{
    string photos=Fresh("store-photos");for(int i=0;i<3;i++)Solid(Path.Combine(photos,"p"+i+".jpg"),Color.FromArgb(40*i,90,140),64,48,1);
@@ -730,6 +745,52 @@ exit 0
  static void Bmp(string path,Color color){using(var b=new Bitmap(32,24)){using(var g=Graphics.FromImage(b))g.Clear(color);b.Save(path,ImageFormat.Bmp);}}
  static bool Writable(string path){try{using(var s=new FileStream(path,FileMode.Open,FileAccess.Write,FileShare.ReadWrite|FileShare.Delete)){}return true;}catch(IOException){return false;}}
  [System.Runtime.InteropServices.DllImport("kernel32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode,SetLastError=true)]static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string path,uint access,uint share,IntPtr security,uint creation,uint flags,IntPtr template);
+ static void StorePageTests(){
+  Run("T2e summary has exactly the nonzero lines",()=>{
+   var c=SpatialCatalog.Load(Fresh("e-summary"),new string[0],null);var date=new DateTime(2026,11,25,12,0,0,DateTimeKind.Utc);
+   for(int bits=0;bits<64;bits++){c.Valid=(bits&1)!=0?7:0;c.Legacy=(bits&2)!=0?3:0;c.Unsupported=(bits&32)!=0?5:0;
+    var r=new SpatialRetention.Result{Missing=(bits&4)!=0?2:0,Unknown=((bits&8)!=0?4:0)+c.Unsupported,Unsupported=c.Unsupported,Quarantined=(bits&16)!=0?6:0,EarliestClearUtc=date,LastCompleteScan=date};var lines=new List<string>();
+    if(c.Valid>0)lines.Add("已有 7 张 3D 图片");if(c.Legacy>0)lines.Add("3 张旧格式 · 需要重新生成才会显示立体效果");if(r.Missing>0)lines.Add("2 张的原图暂时找不到 · 至少保留到 "+date.ToLocalTime().ToString("M月d日"));
+    if((bits&8)!=0)lines.Add("4 张的原图在未连接的磁盘上 · 保留");if(r.Quarantined>0)lines.Add("6 个文件已隔离（无法识别或已损坏）· 30 天后移到回收站");if(c.Unsupported>0)lines.Add("5 张来自更新版本的 Matte · 不会改动");
+    Check(App.StoreSummary(c,r)==string.Join("\n",lines),"summary has missing, zero or duplicate lines for mask "+bits);Check(App.StoreFooter(r)=="上次完整检查："+date.ToLocalTime().ToString("yyyy年M月d日 HH:mm"),"complete-scan footer differs");
+   }
+   c.Valid=c.Legacy=c.Unsupported=0;Check(App.StoreSummary(c,null)==""&&App.StoreFooter(null)=="还没有完成过完整检查","empty summary or first-scan footer differs");
+  });
+  Run("T2e legacy explanation follows count and uses supplied text",()=>{
+   string store=Fresh("e-visibility");var c=SpatialCatalog.Load(store,new string[0],null);var app=new App(new TestWall()){TestSettings=new MatteSettings{SpatialFolder=store}};
+   try{foreach(int count in new[]{0,1,0}){c.Legacy=count;app.TestStoreView(c,null);Check(app.TestVisible("StoreLegacyBox")== (count>0),"legacy explanation visibility differs from count");}
+    Check(app.TestText("StoreLegacyInfo")=="新版本按照片内容识别 3D 图片，旧格式的 3D 图片无法确认对应哪张照片，为了不显示错误的立体效果，暂时以普通照片显示。重新生成后会恢复立体效果，旧文件不会被自动删除。","legacy explanation changed");
+   }finally{app.TestClose();}
+  });
+  Run("T2e legacy clean requires second confirmation and excludes v1",()=>{
+   string store=Fresh("e-clean"),legacy=Path.Combine(store,"old.spatial"),nested=Path.Combine(store,"v1","a","keep.spatial"),other=Path.Combine(store,"keep.json");Directory.CreateDirectory(Path.GetDirectoryName(nested));File.WriteAllText(legacy,"old");File.WriteAllText(nested,"new");File.WriteAllText(other,"keep");int calls=0;
+   var app=new App(new TestWall()){TestSettings=new MatteSettings{SpatialFolder=store}};app.legacyRecycle=files=>{calls++;foreach(string p in files)File.Delete(p);};
+   try{app.TestStoreView(SpatialCatalog.Load(store,new string[0],null),null);app.TestClick("StoreLegacyBtn");Pump(100);Check(calls==0&&File.Exists(legacy)&&app.TestLegacyArmed,"legacy cleaned without second confirmation");
+    app.TestClick("StoreLegacyBtn");Until(()=>!app.TestLegacyCleaning,"legacy cleanup unfinished");Check(calls==1&&!File.Exists(legacy),"confirmed legacy cleanup did not recycle");Check(File.Exists(nested)&&File.Exists(other),"legacy cleanup entered v1 or touched non-legacy files");Until(()=>!app.TestCatalogLoading,"cleanup catalogue unfinished");Pump(50);
+   }finally{app.TestClose();}
+  });
+  Run("T2e legacy confirmation expires",()=>{
+   string store=Fresh("e-expire"),legacy=Path.Combine(store,"old.spatial");File.WriteAllText(legacy,"old");int calls=0;var app=new App(new TestWall()){TestSettings=new MatteSettings{SpatialFolder=store}};app.legacyRecycle=files=>calls++;
+   try{app.TestStoreView(SpatialCatalog.Load(store,new string[0],null),null);app.TestClick("StoreLegacyBtn");Pump(3200);app.TestClick("StoreLegacyBtn");Check(calls==0&&File.Exists(legacy)&&app.TestLegacyArmed,"expired confirmation still authorized cleanup");}finally{app.TestClose();}
+  });
+  Run("T2e overlong current or selected store refuses move",()=>{
+   string shortPath=Path.GetPathRoot(Here)+"short-store",longPath=shortPath+new string('x',180);var c=SpatialCatalog.Load(shortPath,new string[0],null);var app=new App(new TestWall()){TestSettings=new MatteSettings{SpatialFolder=shortPath}};
+   try{app.TestStoreView(c,null);Check(!app.TestVisible("StorePathWarning"),"short path warning shown");app.TestMoveTo(longPath);Check(!app.TestMoving&&app.TestSettings.SpatialStoreTarget==null&&app.TestText("StoreMoveNote")=="这个位置的路径太长，请选一个更短的文件夹","overlong destination was not refused");
+    app.TestSettings.SpatialStoreTarget=longPath;app.TestStoreView(c,null);Check(app.TestVisible("StorePathWarning"),"overlong current target not shown");app.TestMoveTo(shortPath);Check(!app.TestMoving&&app.TestSettings.SpatialStoreTarget==longPath,"overlong current store was not refused");
+   }finally{app.TestClose();}
+  });
+  Run("T2e licence wording keeps the agreement gate and model link",()=>{
+   var app=new App(new TestWall()){TestSettings=new MatteSettings()};try{Check(!app.TestLicence(false)&&app.TestLicence(true),"license acceptance gate changed");Check(App.SharpLicenseUrl.EndsWith("/LICENSE_MODEL"),"model license link missing");
+    Check(app.TestText("SharpLicenseText")=="SHARP 的模型由 Apple 提供，许可证只允许\"以推进科学研究为唯一目的\"的非商业研究使用，不包括产品开发或任何商业用途。用它来制作个人壁纸是否在许可范围内，需要你自己判断；Matte 不附带也不分发这个模型，只在你同意后从 Apple 下载到你的电脑。","model license explanation changed");
+    app.TestRenderPage("SharpPage",Path.Combine(Here,"t2e-license.png"),500);
+   }finally{app.TestClose();}
+   string repo=Directory.GetCurrentDirectory();foreach(string name in new[]{"README.md","spatial/README.md","THIRD_PARTY_NOTICES.md"}){string text=File.ReadAllText(Path.Combine(repo,name));Check(!text.Contains("non-commercial research use only")&&text.Contains("sole intent")&&text.Contains("product development")&&text.Contains("neither ships nor redistributes")&&text.Contains("not affiliated with or endorsed by Apple"),"incomplete licence wording in "+name);}
+  });
+  Run("T2e store view renders summary and legacy actions",()=>{
+   string store=Fresh("e-render");var c=SpatialCatalog.Load(store,new string[0],null);c.Valid=7;c.Legacy=3;c.Unsupported=5;var r=new SpatialRetention.Result{Missing=2,Unknown=9,Unsupported=5,Quarantined=6,EarliestClearUtc=DateTime.UtcNow.AddDays(30),LastCompleteScan=DateTime.UtcNow};
+   var app=new App(new TestWall()){TestSettings=new MatteSettings{SpatialFolder=store}};try{app.TestStoreView(c,r);Check(app.TestText("StoreAutoInfo")==App.StoreSummary(c,r),"store UI did not use summary");app.TestRenderPage("SpatialStorePage",Path.Combine(Here,"t2e-store.png"),750);}finally{app.TestClose();}
+  });
+ }
  static DateTime RetentionNow{get{return new DateTime(2026,10,23,1,0,0,DateTimeKind.Utc);}}
  static SpatialRetention.Result Retain(string store,IEnumerable<string> roots,DateTime now,SpatialRetention.IO io=null,Action<string> recycle=null){string locks=Path.Combine(Path.GetDirectoryName(store),"locks");return SpatialRetention.Sweep(store,roots,recycle??File.Delete,e=>{},now,io,Path.Combine(locks,"generator.lock"),Path.Combine(locks,"store.lock"));}
  static string RetentionKey(string artifact){return Path.GetFileName(Path.GetDirectoryName(artifact))+"/"+Path.GetFileNameWithoutExtension(artifact);}
@@ -952,7 +1013,7 @@ exit 0
    var catalog=first.Complete(()=>false);var app=new App(new TestWall()){TestSettings=new MatteSettings{Playlist=new List<string>{a,b,legacy},SpatialFolder=store}};
    try{app.TestCatalog(catalog,a,b,legacy);Check(app.TestSpatialPath(a)==pa&&app.TestSpatialPath(b)==pb,"same stems attached to the wrong pair");
     Check(app.TestSpatialPath(legacy)==null&&app.TestSpatialSlides==2,"legacy stem fallback catalogued an unverified picture");Check(app.TestNeeds()[1]==1,"legacy photo not counted as needing generation");
-    Check(catalog.Legacy==1&&catalog.StoreText().Contains("旧格式，需要重新生成"),"legacy count wording");Check(File.Exists(Path.Combine(store,"old.spatial")),"legacy picture mutated");
+    Check(catalog.Legacy==1&&catalog.StoreText().Contains("旧格式 · 需要重新生成才会显示立体效果"),"legacy count wording");Check(File.Exists(Path.Combine(store,"old.spatial")),"legacy picture mutated");
    }finally{app.TestClose();}
   });
   Run("T2c1 rename and copies reuse content",()=>{

@@ -14,7 +14,7 @@ Around that sits a quiet tray app: synchronized cross-fades between photos, a pa
 
 ### Spatial 3D (optional)
 
-Photos that have a `.spatial` depth file become **parallax 3D wallpapers**. A native Direct3D 11 renderer draws them. It only redraws when something changes, so it costs almost nothing while you work, and it pauses while a fullscreen app is in front. The camera can follow the mouse, move against it, circle slowly, or drift like a handheld shot. Photos without depth play flat, and the two mix freely in one playlist.
+Photos with a verified v1 `.spatial` pair become **parallax 3D wallpapers**. A native Direct3D 11 renderer draws them. It only redraws when something changes, so it costs almost nothing while you work, and it pauses while a fullscreen app is in front. The camera can follow the mouse, move against it, circle slowly, or drift like a handheld shot. Photos without depth play flat, and the two mix freely in one playlist.
 
 Matte installs the depth generator for you when you first need it. See [Spatial generation](#spatial-generation).
 
@@ -42,14 +42,17 @@ Matte makes `.spatial` files with Apple's **SHARP** model ([apple/ml-sharp](http
 - **CPU edition (default):** downloads about 2.9 GB and takes about 3.6 GB on disk. One photo took about 50 seconds on the test machine (1.5 to 2.5 minutes on a typical laptop).
 - **GPU acceleration (optional):** for NVIDIA cards with 8 GB of graphics memory or more. It downloads another 2.6 GB and is about 2.5 times faster. You can switch between the two later.
 
-SHARP's code is under Apple's sample-code license and ships with Matte. **SHARP's model weights are under Apple's Machine Learning Research Model License, which allows non-commercial research use only.** Matte does not include the weights. It shows the license, and only after you accept it are the weights downloaded from Apple onto your computer. Whether your use fits the license is for you to judge.
+SHARP's model weights are under the [Apple Machine Learning Research Model License](https://github.com/apple/ml-sharp/blob/main/LICENSE_MODEL), which permits use only for non-commercial research "with the sole intent to advance scientific knowledge" and excludes product development and commercial use. Matte neither ships nor redistributes the weights; it downloads them from Apple onto your computer only after you accept the license. Whether personal wallpaper use falls within those terms is your judgement.
+
+SHARP's code (`spatial/sharp`) is under Apple's sample-code license, kept with its license and notices. Matte is not affiliated with or endorsed by Apple.
 
 Everything is installed into `spatial\runtime` next to `Matte.exe`; 存储与清理 → SHARP → 管理 removes it. Pictures are made in the background at low priority, and making pauses while a fullscreen app is in front or the computer runs on battery. For the details, or to plug in your own generator, see [spatial/README.md](spatial/README.md).
 
-Matte keeps the pictures tidy by itself:
-- A renamed or moved photo gets its depth file back, matched by content fingerprint.
-- A photo on an unplugged disk keeps its depth file.
-- A depth file whose photo is truly gone goes to the Recycle Bin after 30 days.
+Matte identifies photos by their full content hash, and verifies the photo and depth bytes before showing 3D:
+- Renamed, moved or identical copied photos reuse the same verified depth file.
+- Legacy top-level `.spatial` files play flat until regenerated. They are kept and never renamed or automatically deleted; 存储与清理 offers regeneration and a two-step action to move only legacy files to the Recycle Bin.
+- Valid v1 pairs whose photos are absent are retained for at least 30 days of complete scans. Offline or unreadable sources reset that interval; unsupported newer versions are left untouched.
+- Invalid or orphan v1 files are isolated in quarantine, then moved to the Recycle Bin after 30 days. A file currently held by the player is kept.
 
 ## Build from source
 

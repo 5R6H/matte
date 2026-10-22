@@ -322,7 +322,7 @@
    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
    <DockPanel Margin="0,0,0,12">
     <Button x:Name="SpatialStoreBack" Style="{StaticResource Round}" Background="Transparent" Margin="-6,0,6,0"><ContentControl x:Name="SpatialStoreBackIcon" Width="16" Height="16"/></Button>
-    <StackPanel VerticalAlignment="Center"><TextBlock Text="存储与清理" FontSize="14.5" FontWeight="SemiBold"/><TextBlock x:Name="StoreTotal" FontSize="12" Foreground="{DynamicResource Ink2}"/></StackPanel>
+    <StackPanel VerticalAlignment="Center"><TextBlock Text="存储与清理" FontSize="14.5" FontWeight="SemiBold"/><TextBlock x:Name="StoreSize" FontSize="12" Foreground="{DynamicResource Ink2}"/><TextBlock x:Name="StoreTotal" Visibility="Collapsed"/></StackPanel>
    </DockPanel>
    <!-- rows as in 设置: an icon, what it is (a line under it), its actions at the right; hairlines between. They scroll
         if the page is short (the default-location and old-copy rows come and go). -->
@@ -334,6 +334,7 @@
       <Button x:Name="StoreMoveBtn" Style="{StaticResource Pill}" Height="28" Margin="6,0,0,0" ToolTip="把 Spatial 图片移到别的文件夹（比如另一个磁盘）"><TextBlock Text="移动…" Margin="11,0" FontSize="12.5"/></Button>
      </StackPanel>
      <StackPanel VerticalAlignment="Center"><TextBlock Text="位置"/><TextBlock x:Name="StorePath" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,1,0,0"/></StackPanel></DockPanel></Border>
+    <TextBlock x:Name="StorePathWarning" Visibility="Collapsed" Text="这个位置的路径太长，请选一个更短的文件夹" FontSize="11.5" Foreground="{DynamicResource Ink2}" Margin="38,0,12,6" TextWrapping="Wrap" TextTrimming="None"/>
     <!-- while moving, or what went wrong -->
     <Border x:Name="StoreMoveBox" Padding="38,0,12,6" Visibility="Collapsed"><StackPanel>
      <TextBlock x:Name="StoreMoveNote" FontSize="11.5" Foreground="{DynamicResource Ink2}" TextWrapping="Wrap" TextTrimming="None"/>
@@ -345,9 +346,17 @@
      <Button x:Name="StoreBackBtn" DockPanel.Dock="Right" Style="{StaticResource Pill}" Height="28" VerticalAlignment="Center"><TextBlock Text="移回" Margin="11,0" FontSize="12.5"/></Button>
      <StackPanel VerticalAlignment="Center"><TextBlock Text="移回默认位置" FontSize="12.5"/><TextBlock x:Name="StoreDefaultPath" FontSize="11.5" Foreground="{DynamicResource Ink3}"/></StackPanel></DockPanel></Border>
     <Border Height="1" Background="{DynamicResource Hair}" Margin="12,6"/>
-    <!-- tidying is automatic (SpatialIndex): what it does, and what the last check found -->
+    <!-- The catalogue summary and the last conservative retention scan. StoreTotal is kept above for older catalogue callbacks. -->
     <Border Padding="12,8"><DockPanel><ContentControl x:Name="StoreAutoIcon" Width="16" Height="16" Margin="0,2,10,0" VerticalAlignment="Top"/>
-     <StackPanel><TextBlock Text="自动整理"/><TextBlock x:Name="StoreAutoInfo" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,2,0,0" TextWrapping="Wrap" TextTrimming="None" LineHeight="17"/></StackPanel></DockPanel></Border>    <!-- after a move: the old copy, kept until cleared here -->
+     <StackPanel><TextBlock Text="自动整理"/><TextBlock x:Name="StoreAutoInfo" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,2,0,0" TextWrapping="Wrap" TextTrimming="None" LineHeight="17"/>
+      <StackPanel x:Name="StoreLegacyBox" Visibility="Collapsed" Margin="0,8,0,0">
+       <TextBlock x:Name="StoreLegacyInfo" Text="新版本按照片内容识别 3D 图片，旧格式的 3D 图片无法确认对应哪张照片，为了不显示错误的立体效果，暂时以普通照片显示。重新生成后会恢复立体效果，旧文件不会被自动删除。" FontSize="11.5" Foreground="{DynamicResource Ink3}" TextWrapping="Wrap" TextTrimming="None" LineHeight="17"/>
+       <WrapPanel Margin="0,8,0,0"><Button x:Name="StoreRegenerateBtn" Style="{StaticResource Primary}" Height="28" Margin="0,0,6,6"><TextBlock Text="重新生成" FontSize="12.5" Margin="11,0"/></Button>
+        <Button x:Name="StoreLegacyBtn" Style="{StaticResource Pill}" Height="28" Margin="0,0,0,6"><TextBlock x:Name="StoreLegacyBtnText" Text="清理旧格式文件…" FontSize="12.5" Margin="11,0"/></Button></WrapPanel>
+      </StackPanel>
+      <TextBlock x:Name="StoreScanFooter" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,8,0,0" TextWrapping="Wrap" TextTrimming="None"/>
+     </StackPanel></DockPanel></Border>
+    <!-- after a move: the old copy, kept until cleared here -->
     <StackPanel x:Name="StoreOldBox" Visibility="Collapsed">
      <Border Height="1" Background="{DynamicResource Hair}" Margin="12,6"/>
      <Border Height="56" Padding="12,0"><DockPanel><ContentControl x:Name="StoreOldIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
@@ -385,9 +394,9 @@
        <StackPanel VerticalAlignment="Center"><TextBlock Text="显卡加速"/><TextBlock x:Name="SharpGpuInfo" FontSize="11.5" Foreground="{DynamicResource Ink3}" Margin="0,1,0,0"/></StackPanel></DockPanel></Button>
      </StackPanel>
     </StackPanel>
-    <!-- Apple's license: two sentences, the full text, the tick that unlocks 同意并下载 -->
+    <!-- Apple's license: scope, the full text, the tick that unlocks 同意并下载 -->
     <StackPanel x:Name="SharpLicenseBox">
-     <TextBlock Text="SHARP 模型只许可用于非商业研究。Matte 不附带模型，同意后从 Apple 直接下载，是否符合许可由你判断。" FontSize="12.5" Foreground="{DynamicResource Ink2}" TextWrapping="Wrap" TextTrimming="None" LineHeight="19" Margin="12,0,12,8"/>
+     <TextBlock x:Name="SharpLicenseText" Text="SHARP 的模型由 Apple 提供，许可证只允许&quot;以推进科学研究为唯一目的&quot;的非商业研究使用，不包括产品开发或任何商业用途。用它来制作个人壁纸是否在许可范围内，需要你自己判断；Matte 不附带也不分发这个模型，只在你同意后从 Apple 下载到你的电脑。" FontSize="12.5" Foreground="{DynamicResource Ink2}" TextWrapping="Wrap" TextTrimming="None" LineHeight="19" Margin="12,0,12,8"/>
      <Button x:Name="SharpReadRow" Style="{StaticResource Row}" Height="40"><DockPanel><ContentControl x:Name="SharpReadIcon" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center"/><TextBlock Text="阅读许可证全文" VerticalAlignment="Center"/></DockPanel></Button>
      <Border Height="1" Background="{DynamicResource Hair}" Margin="12,6"/>
      <Button x:Name="SharpAgreeRow" Style="{StaticResource Row}" Height="40"><DockPanel>

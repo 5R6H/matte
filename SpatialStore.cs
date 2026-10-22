@@ -11,11 +11,11 @@ using System.Windows.Controls;
 // deletes pictures. The sweep runs a minute after Matte starts, every six hours, after each generation and when this
 // page opens - never while pictures are being made or the store is being moved.
 partial class App {
- class StoreInfo{public string Dir;public int Files;public long Bytes;}
+ class StoreInfo{public string Dir;public int Files;public long Bytes;public SpatialCatalog Catalog;}
  StoreInfo storeInfo;int storeGeneration;System.Windows.Threading.DispatcherTimer storeDisarm;
  StoreInfo ReadStore(){
-  var s=new StoreInfo{Dir=SpatialCacheDir};if(!Directory.Exists(s.Dir))return s;
-  var catalog=SpatialCatalog.Load(s.Dir,new string[0],null);s.Files=catalog.Legacy+catalog.Valid;s.Bytes=catalog.Bytes;
+  var s=new StoreInfo{Dir=SpatialCacheDir};
+  var catalog=SpatialCatalog.Load(s.Dir,new string[0],null);s.Catalog=catalog;s.Files=catalog.Legacy+catalog.Valid;s.Bytes=catalog.Bytes;
   long ob=0;foreach(var d in (settings.SpatialStoreOld??new List<string>()).Where(Directory.Exists))try{ob+=new DirectoryInfo(d).EnumerateFiles("*",SearchOption.AllDirectories).Sum(x=>x.Length);}catch{}storeOldBytes=ob;
   return s;
  }
@@ -25,15 +25,16 @@ partial class App {
  void RefreshStore(){RefreshStoreView();RunSpatialSweep(false,true);}
  void RefreshStoreView(){
   if(panel==null)return;int g=++storeGeneration;
-  if(storeInfo==null)P<TextBlock>("StoreTotal").Text="正在统计…";
+  if(storeInfo==null)P<TextBlock>("StoreSize").Text="正在统计…";
   Task.Run(()=>ReadStore()).ContinueWith(t=>panel.Dispatcher.BeginInvoke(new Action(()=>{if(g!=storeGeneration)return;if(t.Exception!=null){Log("Spatial store: "+t.Exception.InnerException.Message);return;}storeInfo=t.Result;PaintStore();})));
  }
  void PaintStore(){
   var s=storeInfo;if(s==null)return;
-  P<TextBlock>("StoreTotal").Text=s.Files+" 张 · "+SizeText(s.Bytes).Replace("约 ","");
+  P<TextBlock>("StoreSize").Text=SizeText(s.Bytes).Replace("约 ","");
+  P<TextBlock>("StorePathWarning").Visibility=StorePathTooLong(s.Dir,settings.SpatialStoreTarget)?Visibility.Visible:Visibility.Collapsed;
   string where=settings.SpatialStoreTarget??s.Dir;P<TextBlock>("StorePath").Text=where.Replace(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"%LOCALAPPDATA%");P<TextBlock>("StorePath").ToolTip=where;
   P<Border>("StoreBackRow").Visibility=settings.SpatialStoreTarget!=null&&!storeMoving?Visibility.Visible:Visibility.Collapsed;
-  foreach(var n in new[]{"StoreMoveBtn","StoreBackBtn"})P<Button>(n).IsEnabled=!storeMoving&&!Generating;
+  foreach(var n in new[]{"StoreMoveBtn","StoreBackBtn"})P<Button>(n).IsEnabled=!storeMoving&&!Generating&&!legacyCleaning;
   var old=(settings.SpatialStoreOld??new List<string>()).Where(Directory.Exists).ToList();
   P<StackPanel>("StoreOldBox").Visibility=old.Count>0?Visibility.Visible:Visibility.Collapsed;
   if(old.Count>0){P<TextBlock>("StoreOldInfo").Text=SizeText(storeOldBytes).Replace("约 ","")+" · 新位置核对无误后可以清掉";P<TextBlock>("StoreOldBtnText").Text=oldArmed?"确认移到回收站":"清理";P<Button>("StoreOldBtn").IsEnabled=!storeMoving;}
@@ -70,14 +71,42 @@ partial class App {
    }finally{ResumeQueuedGeneration();}
   })));
  }
+ internal static string StoreSummary(SpatialCatalog c,SpatialRetention.Result r){var lines=new List<string>();string inventory=c.StoreText();if(inventory.Length>0)lines.Add(inventory);
+  if(r!=null&&r.Missing>0&&r.EarliestClearUtc.HasValue)lines.Add(r.Missing+" 张的原图暂时找不到 · 至少保留到 "+r.EarliestClearUtc.Value.ToLocalTime().ToString("M月d日",System.Globalization.CultureInfo.InvariantCulture));
+  int unknown=r==null?c.Unreadable:Math.Max(0,r.Unknown-r.Unsupported);if(unknown>0)lines.Add(unknown+" 张的原图在未连接的磁盘上 · 保留");
+  if(r!=null&&r.Quarantined>0)lines.Add(r.Quarantined+" 个文件已隔离（无法识别或已损坏）· 30 天后移到回收站");
+  if(c.Unsupported>0)lines.Add(c.Unsupported+" 张来自更新版本的 Matte · 不会改动");return string.Join("\n",lines);
+ }
+ internal static string StoreFooter(SpatialRetention.Result r){return r!=null&&r.LastCompleteScan.HasValue?"上次完整检查："+r.LastCompleteScan.Value.ToLocalTime().ToString("yyyy年M月d日 HH:mm",System.Globalization.CultureInfo.InvariantCulture):"还没有完成过完整检查";}
  void PaintSweep(){
-  if(panel==null)return;var r=sweepResult;
-  string head="Spatial 图片不会自动删除 · 原图找不到时，图片仍保留，由你决定何时清理";
-  if(r==null){P<TextBlock>("StoreAutoInfo").Text=head;return;}
-  var parts=new List<string>();
-  if(r.Missing>0)parts.Add(r.Missing+" 张原图找不到，图片已保留（"+SizeText(r.MissingBytes).Replace("约 ","")+"）");
-  if(r.Offline>0)parts.Add(r.Offline+" 张的原图在未连接的磁盘上，保留");
-  P<TextBlock>("StoreAutoInfo").Text=head+"\n上次检查 "+r.When.ToString("HH:mm")+(parts.Count>0?" · "+string.Join(" · ",parts):" · 一切对应正常");
+  if(panel==null||storeInfo==null)return;var c=storeInfo.Catalog;var r=lastSweepStore==storeInfo.Dir?retentionResult:null;
+  P<TextBlock>("StoreAutoInfo").Text=StoreSummary(c,r);P<TextBlock>("StoreScanFooter").Text=StoreFooter(r);
+  P<StackPanel>("StoreLegacyBox").Visibility=c.Legacy>0?Visibility.Visible:Visibility.Collapsed;
+  P<TextBlock>("StoreLegacyBtnText").Text=legacyArmed?"确认移到回收站":"清理旧格式文件…";
+  P<Button>("StoreLegacyBtn").IsEnabled=P<Button>("StoreRegenerateBtn").IsEnabled=!storeMoving&&!Generating&&!legacyCleaning;
+ }
+ bool legacyArmed,legacyCleaning;string legacyConfirmStore;System.Windows.Threading.DispatcherTimer legacyDisarm;
+ internal Action<List<string>> legacyRecycle=RecycleMany; // tests replace only the OS Recycle Bin operation
+ void CreateStoreActions(){
+  Click("StoreLegacyBtn",CleanLegacyStore);
+  Click("StoreRegenerateBtn",()=>{if(!GeneratorAvailable){OpenSharp("spatialstore");return;}string why=StartGeneration();GoPage("spatial",-1);GenChanged();if(why!=null)GenNoteShow(why);});
+ }
+ void CleanLegacyStore(){
+  if(legacyCleaning||storeMoving||Generating)return;string store=SpatialCacheDir;
+  if(!legacyArmed||!string.Equals(legacyConfirmStore,store,StringComparison.OrdinalIgnoreCase)){
+   legacyArmed=true;legacyConfirmStore=store;if(legacyDisarm==null){legacyDisarm=new System.Windows.Threading.DispatcherTimer{Interval=TimeSpan.FromSeconds(3)};legacyDisarm.Tick+=delegate{legacyDisarm.Stop();legacyArmed=false;PaintSweep();};}
+   legacyDisarm.Stop();legacyDisarm.Start();PaintSweep();return;
+  }
+  legacyArmed=false;legacyDisarm.Stop();legacyCleaning=true;PaintStore();
+  var dispatcher=panel.Dispatcher;Task.Run(()=>{
+   // Legacy files are independent of generation. The store lock prevents moves during this explicit cleanup.
+   using(SpatialStoreLock.Acquire(SpatialStoreLock.DefaultPath,0)){
+    var files=Directory.Exists(store)?Directory.GetFiles(store,"*.spatial",SearchOption.TopDirectoryOnly).ToList():new List<string>();legacyRecycle(files);
+   }
+  }).ContinueWith(t=>dispatcher.BeginInvoke(new Action(()=>{
+   legacyCleaning=false;if(t.Exception!=null){Log("Legacy cleanup: "+t.Exception.InnerException.Message);StoreMoveNote("没有清掉旧格式文件："+t.Exception.InnerException.Message,-1);}
+   LoadSpatialCatalog();RefreshStoreView();
+  })));
  }
  // many files to the Recycle Bin in one go (silently: the owner confirmed with the button)
  static void RecycleMany(List<string> files){
@@ -94,8 +123,12 @@ partial class App {
   box.Visibility=Visibility.Visible;P<TextBlock>("StoreMoveNote").Text=text;var bar=P<Grid>("StoreMoveBar");
   bar.Visibility=progress<0?Visibility.Collapsed:Visibility.Visible;if(progress>=0){bar.ColumnDefinitions[0].Width=new GridLength(progress,GridUnitType.Star);bar.ColumnDefinitions[1].Width=new GridLength(1-progress,GridUnitType.Star);}
  }
+ const string LongStoreMessage="这个位置的路径太长，请选一个更短的文件夹";
+ internal static bool StorePathTooLong(string path,string target){return SpatialIdentity.StoreTooLong(path)||(target!=null&&SpatialIdentity.StoreTooLong(target));}
+ bool RefuseLongStore(string dest){if(!StorePathTooLong(SpatialCacheDir,settings.SpatialStoreTarget)&&!SpatialIdentity.StoreTooLong(dest))return false;StoreMoveNote(LongStoreMessage,-1);return true;}
  void MoveStore(bool back){
-  if(storeMoving)return;
+  if(storeMoving||legacyCleaning)return;
+  if(RefuseLongStore(SpatialCacheDir))return;
   if(Generating){StoreMoveNote("正在生成 Spatial 图片，结束后再移动",-1);return;}
   string dest;
   if(back)dest=SpatialCacheDir;
@@ -103,11 +136,15 @@ partial class App {
    var h=new System.Windows.Interop.WindowInteropHelper(panel).Handle;List<string> picked;dropping=true;
    try{picked=PickPaths(h,true);}catch(Exception e){Log("Store picker: "+e.Message);picked=new List<string>();}finally{dropping=false;}
    panel.Activate();if(picked.Count==0)return;
-   string chosen=picked[0];
+   string chosen=picked[0];if(RefuseLongStore(chosen))return;
    // an empty folder is used as it is; otherwise the pictures get their own folder in it
    bool empty=!Directory.Exists(chosen)||!Directory.EnumerateFileSystemEntries(chosen).Any();
    dest=empty?chosen:Path.Combine(chosen,"Spatial 图片");
   }
+  MoveStoreTo(back,dest);
+ }
+ void MoveStoreTo(bool back,string dest){
+  if(storeMoving||legacyCleaning||Generating||RefuseLongStore(dest))return;
   storeMoving=true;PaintStore();StoreMoveNote("正在复制…",0);
   string def=SpatialCacheDir,cur=settings.SpatialStoreTarget;
   System.Threading.Tasks.Task.Run(()=>SpatialStoreMove.Move(def,cur,dest,p=>panel.Dispatcher.BeginInvoke(new Action(()=>StoreMoveNote("正在复制 "+(int)(p*100)+"%",p))),Log))

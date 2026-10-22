@@ -95,7 +95,7 @@ sealed class SpatialCatalog {
    if(File.Exists(path))File.Replace(temp,path,null);else File.Move(temp,path);
   }catch(IOException){}catch(UnauthorizedAccessException){}finally{try{File.Delete(temp);}catch{}}
  }
- internal string StoreText(){return Valid+" 张新格式 · "+Legacy+" 张旧格式，需要重新生成"+(Unsupported>0?" · "+Unsupported+" 张版本不支持":"")+(Invalid>0?" · "+Invalid+" 张无效":"")+(Unreadable>0?" · "+Unreadable+" 项无法读取":"");}
+ internal string StoreText(){var lines=new List<string>();if(Valid>0)lines.Add("已有 "+Valid+" 张 3D 图片");if(Legacy>0)lines.Add(Legacy+" 张旧格式 · 需要重新生成才会显示立体效果");return string.Join("\n",lines);}
 
  // Called only on the catalogue worker. Desired recipe is independent of any last generation run.
  internal sealed class RecipeCache {

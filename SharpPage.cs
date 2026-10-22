@@ -15,6 +15,7 @@ partial class App {
  SharpCheck sharpCheck;System.Windows.Threading.DispatcherTimer sharpDisarm;long sharpBytes=-1;
 
  void CreateSharpPage(){
+  CreateStoreActions();
   Icon("SharpBackIcon",IBack);Icon("SharpGpuIcon",IChip);Icon("SharpReadIcon",IOpen);Icon("SharpReadyIcon",IImage);
   Icon("SharpEditionIcon",IChip);Icon("SharpWhereIcon",IFolder);
   P<ContentControl>("SharpAgreeTick").Content=IconVisual(ICheck);
@@ -153,7 +154,7 @@ partial class App {
    else sharpView="license";
   }else if(sharpView=="license"){
    if(!rightButton){GoPage(sharpFrom,-1);return;}
-   sharpView="run";StartSharpInstall(sharpWantGpu&&sharpCheck!=null&&sharpCheck.GpuCan);
+   if(!sharpAgreed)return;sharpView="run";StartSharpInstall(sharpWantGpu&&sharpCheck!=null&&sharpCheck.GpuCan);
   }else if(sharpView=="run"){
    if(sharpStage==SharpStage.Failed){
     if(rightButton){StartSharpInstall(sharpGpu);}
@@ -201,7 +202,7 @@ partial class App {
  // user's own in the settings, just that.
  void PaintStoreSharp(){
   if(panel==null)return;var info=P<TextBlock>("StoreSharpInfo");var text=P<TextBlock>("StoreSharpBtnText");var btn=P<Button>("StoreSharpBtn");
-  if(!catalogLoading)LoadSpatialCatalog();PaintCatalogStore();
+  if(!catalogLoading)LoadSpatialCatalog();
   btn.IsEnabled=true;btn.Visibility=Visibility.Visible;
   if(SharpBusy){info.Text="正在安装 · "+(int)(sharpTotal>0?sharpDone*100/sharpTotal:0)+"%";text.Text="查看";return;}
   if(CustomGenerator){btn.Visibility=Visibility.Collapsed;info.Text="用设置里指定的生成工具";return;}

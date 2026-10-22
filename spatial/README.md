@@ -22,9 +22,11 @@ Pictures are made in the background at below-normal priority, leaving two CPU co
 
 ## The model's license
 
-SHARP's **code** (in `sharp\`, from [apple/ml-sharp](https://github.com/apple/ml-sharp) at `aed6527`) is under Apple's sample-code license; see `sharp\LICENSE`.
+SHARP's **code** (in `sharp\`, from [apple/ml-sharp](https://github.com/apple/ml-sharp) at `aed6527`) is under Apple's sample-code license, kept with `sharp\LICENSE` and `sharp\ACKNOWLEDGEMENTS`.
 
-SHARP's **weights** are under the Apple Machine Learning Research Model License, which allows non-commercial research use only. Matte does not include them. They are downloaded from Apple onto your computer after you accept that license, and whether your use fits it is for you to judge.
+SHARP's model weights are under the [Apple Machine Learning Research Model License](https://github.com/apple/ml-sharp/blob/main/LICENSE_MODEL), which permits use only for non-commercial research "with the sole intent to advance scientific knowledge" and excludes product development and commercial use. Matte neither ships nor redistributes the weights; it downloads them from Apple onto your computer only after you accept the license. Whether personal wallpaper use falls within those terms is your judgement.
+
+Matte is not affiliated with or endorsed by Apple.
 
 ## Files here
 
@@ -48,7 +50,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File <script> -RootsFile <lis
 ```
 
 - `-RootsFile`: a UTF-8 text file with one path per line. Each line is a folder (every image in it, subfolders included) or a single image.
-- `-Cache`: the picture store. Custom output is unverified unless it supplies valid v1 pairs under the identity contract below. Top-level `<stem>.spatial` files are legacy; they are retained and do not satisfy generation needs. Legacy playback becomes flat in T2c, before this change is released.
+- `-Cache`: the picture store. Custom output is unverified unless it supplies valid v1 pairs under the identity contract below. Top-level `<stem>.spatial` files are legacy; they are retained and do not satisfy generation needs. They play flat until regenerated; the store page explains this and offers explicit, two-step legacy cleanup. No automatic cleanup renames or deletes legacy files.
 
 Matte reads these lines from standard output to show progress:
 
