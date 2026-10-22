@@ -81,9 +81,12 @@ static class MatteTests {
  static void ClearSettings(){foreach(var x in new[]{"",".bak",".bad",".tmp"})if(File.Exists(SettingsFile+x))File.Delete(SettingsFile+x);}
 
  [STAThread] static int Main(string[] args){
+  if(args.Length==3&&args[0]=="--hold-lock"){using(SpatialStoreLock.Acquire(args[1],3000)){Console.WriteLine("LOCKED");Console.Out.Flush();System.Threading.Thread.Sleep(int.Parse(args[2]));}return 0;}
+  if(args.Contains("--locks")){LockTests();return failures;}
   if(args.Contains("--store")){StoreTests();return failures;}
   IdentityTests();if(args.Contains("--identity"))return failures;
   StoreTests();
+  LockTests();
   // ② the store page's sweep runs once, not again and again
   Run("2 store page sweeps once",()=>{
    string photos=Fresh("store-photos");for(int i=0;i<3;i++)Solid(Path.Combine(photos,"p"+i+".jpg"),Color.FromArgb(40*i,90,140),64,48,1);
@@ -152,8 +155,8 @@ static class MatteTests {
    Check(bad.Done==1&&bad.Failed==1,"error exit: done "+bad.Done+", failed "+bad.Failed+" (want 1, 1)");
   });
   Run("8 the generator says when a photo is saved",()=>{
-   string py=File.ReadAllText(Path.Combine(Here,@"..\..\spatial\matte_sharp.py"));
-   Check(py.Contains("print(f'Saved: {photo.name}'"),"spatial\\matte_sharp.py no longer prints Saved: <name>, which GenProgress counts");
+   string py=File.ReadAllText(Path.Combine(Here,@"..\..\spatial\publish.py"));
+   Check(py.Contains("emit(f'Saved: {photo.name}')"),"spatial\\publish.py no longer emits Saved: <name>, which GenProgress counts");
   });
 
   // ⑨ settings written safely and read back safely
@@ -530,6 +533,65 @@ exit 0
   b.Save(path,jpeg,q);
  }
  static bool Near(uint a,uint b,int tol){for(int k=0;k<3;k++){int x=(int)((a>>(8*k))&255),y=(int)((b>>(8*k))&255);if(Math.Abs(x-y)>tol)return false;}return true;}
+ static System.Diagnostics.Process LockChild(string command,string arguments){return App.StartDirect(new System.Diagnostics.ProcessStartInfo(command,arguments){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true});}
+ static void LockReady(System.Diagnostics.Process child){var line=System.Threading.Tasks.Task.Run(()=>child.StandardOutput.ReadLine());Check(line.Wait(5000)&&line.Result=="LOCKED","lock child did not acquire");}
+ static void EndLockChild(System.Diagnostics.Process child){try{if(!child.HasExited){child.Kill();child.WaitForExit(5000);}}finally{child.Dispose();}}
+ static void LockTimeout(string path,int timeout){bool blocked=false;try{using(SpatialStoreLock.Acquire(path,timeout)){}}catch(TimeoutException){blocked=true;}Check(blocked,"second holder acquired the lock");}
+ static void LockTests(){
+  Run("T2b lock excludes another handle and releases",()=>{
+   string path=Path.Combine(Fresh("b-lock"),"store.lock");var first=SpatialStoreLock.Acquire(path,0);
+   try{LockTimeout(path,150);}finally{first.Dispose();first.Dispose();}
+   using(SpatialStoreLock.Acquire(path,0)){}
+  });
+  Run("T2b lock excludes another process then waits for release",()=>{
+   string path=Path.Combine(Fresh("b-process"),"store.lock");var child=LockChild(Path.Combine(Here,"MatteTests.exe"),"--hold-lock \""+path+"\" 700");
+   try{LockReady(child);LockTimeout(path,100);var watch=System.Diagnostics.Stopwatch.StartNew();using(SpatialStoreLock.Acquire(path,3000)){Check(watch.ElapsedMilliseconds>=400,"did not wait for child's lock");}}
+   finally{EndLockChild(child);}
+  });
+  Run("T2b move refuses held stable lock",()=>{
+   string root=Fresh("b-move"),original=Path.Combine(root,"old"),dest=Path.Combine(root,"new");MoveFixture(original);bool failed=false;
+   try{using(SpatialStoreLock.Acquire(SpatialStoreLock.DefaultPath,0)){
+     try{SpatialStoreMove.Move(original,null,dest,null,s=>{});}catch(IOException e){failed=true;Check(e.Message=="存储正在使用，请稍后再移动","busy message not plain Chinese");}}
+    Check(failed,"move bypassed the stable lock");Check(!SpatialStoreMove.IsJunction(original)&&!Directory.Exists(dest),"busy move changed store locations");
+   }finally{RemoveTestJunction(original);}
+  });
+  Run("T2b move holds stable lock through verification",()=>{
+   string root=Fresh("b-duration"),original=Path.Combine(root,"old"),dest=Path.Combine(root,"new");MoveFixture(original);bool checkedLock=false;
+   try{SpatialStoreMove.BeforeVerify=stage=>{LockTimeout(SpatialStoreLock.GeneratorPath,0);LockTimeout(SpatialStoreLock.DefaultPath,0);checkedLock=true;};SpatialStoreMove.Move(original,null,dest,null,s=>{});Check(checkedLock,"verification hook not reached");}
+   finally{SpatialStoreMove.BeforeVerify=null;RemoveTestJunction(original);}
+  });
+  Run("T2b move refuses held generator lock",()=>{
+   string root=Fresh("b-generator-move"),original=Path.Combine(root,"old"),dest=Path.Combine(root,"new");MoveFixture(original);bool failed=false;
+   var child=LockChild(Path.Combine(Here,"MatteTests.exe"),"--hold-lock \""+SpatialStoreLock.GeneratorPath+"\" 10000");
+   try{LockReady(child);var watch=System.Diagnostics.Stopwatch.StartNew();
+    try{SpatialStoreMove.Move(original,null,dest,null,s=>{});}catch(IOException e){failed=true;Check(e.Message=="正在生成立体照片，请结束后再移动","generator busy message not plain Chinese");}
+    Check(failed,"move bypassed generator.lock");Check(watch.ElapsedMilliseconds<1000,"busy move did not fail fast");
+    Check(!SpatialStoreMove.IsJunction(original)&&!Directory.Exists(dest),"busy move changed store locations");
+   }finally{EndLockChild(child);RemoveTestJunction(original);}
+  });
+  Run("T2b move takes generator lock before store lock",()=>{
+   string root=Fresh("b-lock-order"),original=Path.Combine(root,"old"),dest=Path.Combine(root,"new");MoveFixture(original);bool failed=false;
+   using(SpatialStoreLock.Acquire(SpatialStoreLock.GeneratorPath,0))using(SpatialStoreLock.Acquire(SpatialStoreLock.DefaultPath,0)){
+    var watch=System.Diagnostics.Stopwatch.StartNew();
+    try{SpatialStoreMove.Move(original,null,dest,null,s=>{});}catch(IOException e){failed=true;Check(e.Message=="正在生成立体照片，请结束后再移动","store.lock acquired before generator.lock");}
+    Check(failed&&watch.ElapsedMilliseconds<1000,"move waited on store.lock before generator.lock");}
+  });
+  string python=Environment.GetEnvironmentVariable("MATTE_TEST_PYTHON"),prefix=Environment.GetEnvironmentVariable("MATTE_TEST_PYTHON_ARGS")??"";
+  if(string.IsNullOrEmpty(python)){Console.WriteLine("SKIP C#/Python store lock tests: no Python 3");return;}
+  string script=Path.GetFullPath(Path.Combine(Here,@"..\..\spatial\test_publish.py"));
+  Run("T2b C# lock blocks Python",()=>{
+   string path=Path.Combine(Fresh("b-cs-py"),"store.lock");
+   using(SpatialStoreLock.Acquire(path,0))using(var child=LockChild(python,prefix+" \""+script+"\" --try-lock \""+path+"\" 150")){
+    Check(child.WaitForExit(5000),"Python lock probe hung");Check(child.ExitCode==2&&child.StandardOutput.ReadToEnd().Trim()=="TIMEOUT","Python acquired C#-held lock: "+child.StandardError.ReadToEnd());}
+   using(var child=LockChild(python,prefix+" \""+script+"\" --try-lock \""+path+"\" 150")){
+    Check(child.WaitForExit(5000)&&child.ExitCode==0,"Python could not acquire released C# lock");}
+  });
+  Run("T2b Python lock blocks C#",()=>{
+   string path=Path.Combine(Fresh("b-py-cs"),"store.lock");var child=LockChild(python,prefix+" \""+script+"\" --hold-lock \""+path+"\" 700");
+   try{LockReady(child);LockTimeout(path,100);Check(child.WaitForExit(5000)&&child.ExitCode==0,"Python holder failed");using(SpatialStoreLock.Acquire(path,0)){}}
+   finally{EndLockChild(child);}
+  });
+ }
  static void StoreFile(string root,string relative,byte[] bytes){string path=Path.Combine(root,relative);Directory.CreateDirectory(Path.GetDirectoryName(path));File.WriteAllBytes(path,bytes);}
  static void LegacyIndex(string store,string stem,string path,string since){
   // Old-install fixture: includes the retired fingerprint/photo cache and an unknown field. SHA-1 sampled

@@ -145,14 +145,14 @@ def store_too_long(store):
 def validate_sidecar(data):
     _object(data, 'version source recipe artifact created')
     _integer(data['version'], 1, 1)
-    source = _object(data['source'], 'sha256 size name path')
+    source = _object(data['source'], 'sha256 size name')
     recipe = _object(data['recipe'], 'sha256 fields')
     artifact = _object(data['artifact'], 'file sha256 size')
     for item in (source, recipe, artifact):
         _digest(item['sha256'])
     for item in (source, artifact):
         _integer(item['size'], 0, 9223372036854775807)
-    _string(source['name']); _string(source['path'])
+    _string(source['name'])
     if recipe_sha256(recipe['fields']) != recipe['sha256']:
         raise ValueError('recipe digest mismatch')
     if not supported(recipe['fields']):

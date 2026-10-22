@@ -15,8 +15,6 @@ $fx='C:\Windows\Microsoft.NET\Framework64\v4.0.30319';$wpf="$fx\WPF"
  "/r:$wpf\PresentationCore.dll" "/r:$wpf\PresentationFramework.dll" "/r:$wpf\WindowsBase.dll" `
  $sources (Join-Path $PSScriptRoot 'MatteTests.cs') "/resource:$repo\GlassPanel.xaml,GlassPanel.xaml"
 if($LASTEXITCODE -ne 0){throw "csc failed"}
-if($IdentityOnly){& "$bin\MatteTests.exe" --identity}else{& "$bin\MatteTests.exe"}
-$failed=$LASTEXITCODE
 # Probe Python 3, in priority order. A present Python 2 (or a broken launcher) is not a Python 3.
 $pythonCommand=$null;$pythonArgs=@()
 $candidates=@(@{Command=(Join-Path $repo 'spatial\runtime\python.exe');Args=@()},@{Command='py';Args=@('-3')},@{Command='python';Args=@()})
@@ -28,8 +26,14 @@ foreach($candidate in $candidates){
   if($LASTEXITCODE -eq 0){$pythonCommand=$command.Source;$pythonArgs=$probeArgs;break}}
  catch{} # An absent launcher runtime is a failed probe, not a test failure.
 }
+$env:MATTE_TEST_PYTHON=$pythonCommand
+$env:MATTE_TEST_PYTHON_ARGS=($pythonArgs -join ' ')
+if($IdentityOnly){& "$bin\MatteTests.exe" --identity}else{& "$bin\MatteTests.exe"}
+$failed=$LASTEXITCODE
 if($pythonCommand){
  & $pythonCommand @pythonArgs (Join-Path $repo 'spatial\test_identity.py')
+ if($LASTEXITCODE -ne 0){$failed++}
+ & $pythonCommand @pythonArgs (Join-Path $repo 'spatial\test_publish.py')
  if($LASTEXITCODE -ne 0){$failed++}
 }else{Write-Output 'SKIP python identity tests: no Python 3'}
 exit $failed

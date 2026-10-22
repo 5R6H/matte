@@ -18,7 +18,14 @@ static class SpatialStoreMove {
  internal static Action<string> BeforeVerify;   // test seam: stage complete, before any verification or switch
  // progress: 0..1 of the bytes copied; log: one line per step (App.Log)
  internal static Result Move(string defaultDir,string currentTarget,string dest,Action<double> progress,Action<string> log){
-  // T2b: take the cross-process store lock here, before enumeration, and hold it through verification and switching.
+  // Global order: generator.lock, then store.lock. Hold both until the move is complete.
+  SpatialStoreLock run;try{run=SpatialStoreLock.Acquire(SpatialStoreLock.GeneratorPath,0);}catch(TimeoutException){throw new IOException("正在生成立体照片，请结束后再移动");}
+  using(run){
+   SpatialStoreLock held;try{held=SpatialStoreLock.Acquire(SpatialStoreLock.DefaultPath,2000);}catch(TimeoutException){throw new IOException("存储正在使用，请稍后再移动");}
+   using(held)return MoveLocked(defaultDir,currentTarget,dest,progress,log);
+  }
+ }
+ static Result MoveLocked(string defaultDir,string currentTarget,string dest,Action<double> progress,Action<string> log){
   string cur=Full(currentTarget??defaultDir);
   bool toDefault=string.Equals(Full(dest),Full(defaultDir),StringComparison.OrdinalIgnoreCase);
   if(toDefault&&currentTarget==null)throw new IOException("已经在默认位置");

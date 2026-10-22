@@ -118,8 +118,8 @@ static class SpatialIdentity {
  internal static bool StoreTooLong(string store){try{string d=new string('0',64);return Math.Max((SidecarPath(store,d,d)+".tmp-"+new string('0',16)).Length,QuarantinePath(store,d,d).Length)>259;}catch(PathTooLongException){return true;}}
  internal static Dictionary<string,object> ValidateSidecar(object value){
   var d=Obj(value,"version source recipe artifact created");Int(d["version"],1,1);
-  var source=Obj(d["source"],"sha256 size name path");var recipe=Obj(d["recipe"],"sha256 fields");var artifact=Obj(d["artifact"],"file sha256 size");
-  Digest(source["sha256"]);Digest(recipe["sha256"]);Digest(artifact["sha256"]);Int(source["size"],0,long.MaxValue);Int(artifact["size"],0,long.MaxValue);Str(source["name"]);Str(source["path"]);
+  var source=Obj(d["source"],"sha256 size name");var recipe=Obj(d["recipe"],"sha256 fields");var artifact=Obj(d["artifact"],"file sha256 size");
+  Digest(source["sha256"]);Digest(recipe["sha256"]);Digest(artifact["sha256"]);Int(source["size"],0,long.MaxValue);Int(artifact["size"],0,long.MaxValue);Str(source["name"]);
   if(RecipeSha256(recipe["fields"])!=(string)recipe["sha256"])throw Bad("recipe digest mismatch");
   if(!Supported(recipe["fields"]))throw Bad("unsupported recipe");
   if(Str(artifact["file"])!=(string)recipe["sha256"]+".spatial")throw Bad("artifact filename mismatch");
