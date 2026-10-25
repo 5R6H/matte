@@ -1,4 +1,4 @@
-using System;using System.IO;using System.Drawing;using System.Windows.Forms;using System.Runtime.InteropServices;using System.Collections.Generic;using Microsoft.Win32;using System.Web.Script.Serialization;
+using System;using System.IO;using System.Linq;using System.Drawing;using System.Windows.Forms;using System.Runtime.InteropServices;using System.Collections.Generic;using Microsoft.Win32;using System.Web.Script.Serialization;
 [ComImport,Guid("B63EA76D-1F85-456F-A19C-48159EFA858B"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]interface IShellItemArray{void BindToHandler();void GetPropertyStore();void GetPropertyDescriptionList();void GetAttributes();uint GetCount();}
 // settings.json, next to the exe.
 class MatteSettings {
@@ -33,15 +33,46 @@ class MessageWindow:Form {
  [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern int RegisterWindowMessage(string name);
  static readonly int TaskbarCreated=RegisterWindowMessage("TaskbarCreated");
  public Action ShellRestarted;
+ public Action StorageChanged;
  public MessageWindow(){ShowInTaskbar=false;FormBorderStyle=FormBorderStyle.None;Opacity=0;var h=Handle;}
  protected override void WndProc(ref Message m){
-  try{if(m.Msg==TaskbarCreated&&TaskbarCreated!=0&&ShellRestarted!=null)BeginInvoke(ShellRestarted);}
+  try{if(m.Msg==TaskbarCreated&&TaskbarCreated!=0&&ShellRestarted!=null)BeginInvoke(ShellRestarted);
+   if(StorageChanged!=null&&(m.Msg==0x219||(m.Msg==0x218&&(m.WParam.ToInt32()==7||m.WParam.ToInt32()==18))))BeginInvoke(StorageChanged);}
   catch(Exception e){App.Log("Window message: "+e.Message);}
   base.WndProc(ref m);}
 }
 // The slideshow: the playlist's photos, one at a time, each on its own colour (or extended, or on its ambience), in 3D
 // when it has a Spatial picture and Spatial is on.
 partial class App {
+ PlaylistInventory photoInventory;long inventoryRefresh=-1;System.Windows.Threading.Dispatcher inventoryDispatcher;
+ internal Func<DateTime> inventoryClock=()=>DateTime.UtcNow;DateTime inventoryWaitSince;
+ void WaitForInventory(long revision){if(inventoryRefresh==revision)return;inventoryRefresh=revision;inventoryWaitSince=inventoryClock();}
+ bool CanUseInventory(InventorySnapshot snapshot){
+  if(snapshot.Scanned){
+   if(snapshot.ReadyPaths.Count>0)return true;
+   // Unknown, unreadable and still-settling photos are not proof of an empty playlist.
+   return snapshot.Entries.All(e=>e.Members.Count==0&&e.Availability.Values.All(a=>a!=InventoryAvailability.Unknown));
+  }
+  // Do not let one slow root hold up usable photos forever. Only this revision's scanned roots qualify.
+  return inventoryRefresh>=0&&(inventoryClock()-inventoryWaitSince).TotalSeconds>=3&&
+   snapshot.Entries.Any(e=>e.Scanned&&e.Members.Any(p=>p.State==PhotoState.Ready));
+ }
+ void CompleteInventoryRefresh(){
+  if(photoInventory==null||inventoryRefresh<0)return;var snapshot=photoInventory.Snapshot;
+  if(snapshot.Revision>inventoryRefresh)WaitForInventory(snapshot.Revision);
+  if(snapshot.Revision<inventoryRefresh||!CanUseInventory(snapshot))return;
+  try{RebuildSlides();}catch(Exception e){Log("Playlist inventory: "+e.Message);}
+ }
+ // Configuration is captured on the UI thread. Disk work and exclusion reads belong to the inventory workers.
+ void SyncPhotoInventory(){
+  if(photoInventory==null){inventoryDispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;
+   photoInventory=new PlaylistInventory(new PhotoFileSystem(),()=>DateTime.UtcNow,a=>{if(!inventoryDispatcher.HasShutdownStarted)inventoryDispatcher.BeginInvoke(a);},Path.Combine(Dir,"excluded-folders.txt"));
+   photoInventory.Changed+=c=>CompleteInventoryRefresh();
+  }
+  if(!inventoryDispatcher.CheckAccess())return;
+  long before=photoInventory.Snapshot.Revision,after=photoInventory.Configure(PlaylistEntries());if(before!=after)WaitForInventory(after);
+ }
+ void DisposePhotoInventory(){if(photoInventory!=null)photoInventory.Dispose();}
  MessageWindow ui;MatteSettings settings;DateTime nextSlide=DateTime.MaxValue;List<string> slideFiles=new List<string>();int slideIndex=0;Random random=new Random();
  static JavaScriptSerializer json=new JavaScriptSerializer();
  string SettingsFile{get{return Path.Combine(Dir,"settings.json");}}
@@ -54,7 +85,7 @@ partial class App {
    SaveSettings();
   }
   DisplayCache.Register(DisplayCacheDir);PinWallpaper(wall.GetWallpaper(wall.GetMonitorDevicePathAt(0)));
-  LoadSpatialMode();ui=new MessageWindow();ui.ShellRestarted=OnShellRestarted;
+  SyncPhotoInventory();LoadSpatialMode();ui=new MessageWindow();ui.ShellRestarted=OnShellRestarted;ui.StorageChanged=()=>photoInventory.Reconcile(true);ui.Disposed+=delegate{DisposePhotoInventory();};
   InitSpatialPower();
   try{UseSlideshow();}catch(Exception e){Log("Slideshow start: "+e.Message);}
  }
@@ -62,23 +93,13 @@ partial class App {
  // Everything on the playlist plays: every image under its folders (subfolders included) and its single images, each
  // once. Any folder name listed in excluded-folders.txt (next to the exe) is skipped.
  List<string> SourceImages(){
-  var excluded=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-  string list=Path.Combine(Dir,"excluded-folders.txt");if(File.Exists(list))foreach(string line in File.ReadAllLines(list)){string n=line.Trim().TrimEnd('\\');if(n.Length>0&&!n.StartsWith("#"))excluded.Add(Path.GetFileName(n));}
-  var result=new List<string>();var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);var pending=new Stack<string>();
-  foreach(string entry in PlaylistEntries()){
-   if(File.Exists(entry)){if(IsImage(entry)&&seen.Add(entry))result.Add(entry);}
-   else if(Directory.Exists(entry))pending.Push(entry);
-  }
-  while(pending.Count>0){string dir=pending.Pop();
-   try{foreach(string f in Directory.GetFiles(dir))if(IsImage(f)&&seen.Add(f))result.Add(f);
-    foreach(string d in Directory.GetDirectories(dir))if(!excluded.Contains(Path.GetFileName(d)))pending.Push(d);}
-   catch(Exception e){Log("A playlist folder could not be read: "+e.Message);}}
-  return result;
+  return photoInventory==null?new List<string>():new List<string>(photoInventory.Snapshot.ReadyPaths);
  }
  // keep: the image to stay on (switching Spatial on/off keeps the same photo, and its countdown, when it can).
  void UseSlideshow(){UseSlideshow(null);}
  void UseSlideshow(string keep){
-  slideFiles.Clear();slideFiles.AddRange(RotationFiles());if(slideFiles.Count==0){ShowEmpty();return;}   // nothing to play: the empty state, not an error
+  List<string> files;if(!TryRotationFiles(out files))return;
+  slideFiles.Clear();slideFiles.AddRange(files);if(slideFiles.Count==0){ShowEmpty();return;}   // scanned and empty, not merely waiting for the inventory
   ArrangeRotation(slideFiles);slideIndex=0;wall.SetPosition(settings.Position);
   int k=keep==null?-1:slideFiles.FindIndex(p=>string.Equals(p,keep,StringComparison.OrdinalIgnoreCase));var timer=nextSlide;
   if(k>=0&&!Sequential){slideFiles.RemoveAt(k);slideFiles.Insert(0,keep);k=0;}   // in order, the rotation carries on from where this photo sits
@@ -95,9 +116,17 @@ partial class App {
  // Spatial file and Spatial is on, flat otherwise. SpatialPlays = some photo in the list will actually show in 3D.
  bool SpatialPlays{get{return spatialEnabled&&spatialSlides.Count>0;}}
  bool Playable(string p){return File.Exists(p);}
- List<string> RotationFiles(){LoadSpatialCatalog();return SourceImages();}
+ bool TryRotationFiles(out List<string> files){
+  SyncPhotoInventory();var snapshot=photoInventory.Snapshot;files=null;
+  if(!CanUseInventory(snapshot)){WaitForInventory(snapshot.Revision);return false;}
+  var scanned=new HashSet<string>(snapshot.Entries.Where(e=>e.Scanned).SelectMany(e=>e.Members.Select(p=>p.Path)),StringComparer.OrdinalIgnoreCase);
+  files=new List<string>();foreach(string path in snapshot.ReadyPaths)if(snapshot.Scanned||scanned.Contains(path))files.Add(path);
+  // Only an explicit rebuild or its pending completion gets here; later root arrivals belong to T4b.
+  inventoryRefresh=-1;LoadSpatialCatalog();return true;
+ }
  void Remember(string next){if(currentSourcePath!=null&&!string.Equals(currentSourcePath,next,StringComparison.OrdinalIgnoreCase)){slideBack.Add(currentSourcePath);if(slideBack.Count>100)slideBack.RemoveAt(0);}}
  void AdvanceSlide(){
+  if(inventoryRefresh>=0)return; // Waiting must not consume history, reset the countdown, or show the empty wallpaper.
   while(slideAhead.Count>0){string p=slideAhead[slideAhead.Count-1];slideAhead.RemoveAt(slideAhead.Count-1);if(Playable(p)){Remember(p);ShowSlide(p);return;}}
   for(int tries=0;tries<slideFiles.Count;tries++){string path=slideFiles[slideIndex++%slideFiles.Count];if(!Playable(path))continue;Remember(path);ShowSlide(path);return;}
   // Nothing playable (playlist emptied or its files gone): the photo on screen stays and it tries again next time.
@@ -108,6 +137,7 @@ partial class App {
  void ShowSlide(string path){BeginSlide(path,false);}
  // Every 2 s (App.Check): a second start of Matte asks for the panel (show.request), and the next photo when it is due.
  void CheckRequests(){
+  SyncPhotoInventory();CompleteInventoryRefresh();
   PinWallpaper(wall.GetWallpaper(wall.GetMonitorDevicePathAt(0))); // Includes delayed/flat wallpaper changes after a transition.
   ReevaluateCurrentSpatial();
   string f=Path.Combine(Dir,"show.request");if(File.Exists(f)){try{File.Delete(f);}catch{}TogglePanel(false);}

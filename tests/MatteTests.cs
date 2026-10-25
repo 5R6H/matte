@@ -10,9 +10,36 @@
 using System;using System.Collections.Generic;using System.Drawing;using System.Drawing.Imaging;using System.IO;using System.Linq;
 using System.Reflection;using System.Runtime.Serialization;using System.Web.Script.Serialization;using System.Windows.Threading;
 
+sealed class InventoryTestClock {
+ long ticks=new DateTime(2026,10,23,0,0,0,DateTimeKind.Utc).Ticks;
+ internal DateTime Now(){return new DateTime(System.Threading.Interlocked.Read(ref ticks),DateTimeKind.Utc);}
+ internal void Add(double seconds){System.Threading.Interlocked.Add(ref ticks,TimeSpan.FromSeconds(seconds).Ticks);}
+}
+sealed class InventoryTestFS:IPhotoFileSystem {
+ internal sealed class Node {internal PhotoStamp Stamp;internal byte[] Data;}
+ internal sealed class Hook:IDisposable {internal Action<string,string> Change;internal Action Error;internal bool Closed;public void Dispose(){Closed=true;}}
+ readonly object gate=new object();readonly Dictionary<string,Node> nodes=new Dictionary<string,Node>(StringComparer.OrdinalIgnoreCase);
+ internal readonly Dictionary<string,Hook> Hooks=new Dictionary<string,Hook>(StringComparer.OrdinalIgnoreCase);
+ internal readonly HashSet<string> Denied=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+ internal int Opens,Scans,Watches,UIEnumerations;internal int UI=System.Threading.Thread.CurrentThread.ManagedThreadId;internal bool FailWatch;
+ internal string BlockPath;internal readonly System.Threading.ManualResetEvent Entered=new System.Threading.ManualResetEvent(false),Release=new System.Threading.ManualResetEvent(false);
+ internal void Dir(string p){lock(gate){nodes[p]=new Node{Stamp=new PhotoStamp(0,1,FileAttributes.Directory)};string parent=Path.GetDirectoryName(p.TrimEnd('\\'));if(parent!=null&&!nodes.ContainsKey(parent))Dir(parent);if(!nodes.ContainsKey(Path.GetPathRoot(p)))nodes[Path.GetPathRoot(p)]=new Node{Stamp=new PhotoStamp(0,1,FileAttributes.Directory)};}}
+ internal void Put(string p,long stamp=1,FileAttributes attributes=FileAttributes.Normal,byte[] bytes=null){lock(gate){Dir(Path.GetDirectoryName(p));var data=bytes??new byte[]{255,216,255,1};nodes[p]=new Node{Stamp=new PhotoStamp(data.Length,stamp,attributes),Data=data};}}
+ internal void Remove(string p){lock(gate){foreach(string k in nodes.Keys.Where(k=>k.Equals(p,StringComparison.OrdinalIgnoreCase)||k.StartsWith(p+"\\",StringComparison.OrdinalIgnoreCase)).ToArray())nodes.Remove(k);}}
+ public PhotoStamp Stat(string p){lock(gate){if(Denied.Contains(p))throw new UnauthorizedAccessException();Node n;if(!nodes.TryGetValue(p,out n))throw new FileNotFoundException();return n.Stamp;}}
+ public string[] Children(string p){string[] result;lock(gate){Scans++;if(System.Threading.Thread.CurrentThread.ManagedThreadId==UI){UIEnumerations++;throw new InvalidOperationException("UI enumeration");}if(Denied.Contains(p))throw new UnauthorizedAccessException();result=nodes.Keys.Where(k=>string.Equals(Path.GetDirectoryName(k),p,StringComparison.OrdinalIgnoreCase)).ToArray();}
+  if(p==BlockPath){Entered.Set();if(!Release.WaitOne(5000))throw new IOException("test barrier timeout");}return result;
+ }
+ public Stream OpenRead(string p){lock(gate){Opens++;if(Denied.Contains(p))throw new IOException();return new MemoryStream(nodes[p].Data??new byte[0]);}}
+ public IDisposable Watch(string p,Action<string,string> changed,Action error){lock(gate){Watches++;if(FailWatch)throw new IOException();var h=new Hook{Change=changed,Error=error};Hooks[p]=h;return h;}}
+ internal void Emit(string root,string path,string old=null){Hook h;lock(gate)h=Hooks[root];if(!h.Closed)h.Change(path,old);}
+ internal void Error(string root){Hook h;lock(gate)h=Hooks[root];h.Error();}
+}
+
 class TestWall:IWallpaper {
+ public int WallpaperSets;
  public string Wallpaper;public uint Color=0x202020;public int Position=4;   // Windows set to "fill" before Matte
- public void SetWallpaper(string monitor,string path){Wallpaper=path;}
+ public void SetWallpaper(string monitor,string path){Wallpaper=path;WallpaperSets++;}
  public string GetWallpaper(string monitor){return Wallpaper;}
  public string GetMonitorDevicePathAt(uint index){return @"\\?\TEST#DISPLAY1";}
  public uint GetMonitorDevicePathCount(){return 1;}
@@ -60,7 +87,21 @@ partial class App {
   ui=new MessageWindow();CreatePanel();panel.ShowActivated=false;panel.ShowInTaskbar=false;panel.Left=-20000;panel.Top=-20000;panel.Show();
   page="spatialstore";RefreshStore();
  }
- internal void TestClose(){if(legacyDisarm!=null)legacyDisarm.Stop();genQueued=false;if(sweepCancel!=null)sweepCancel.Cancel();CancelSlideRequests();ReleaseDisplayPins();PinWallpaper(null);System.Threading.Interlocked.Increment(ref catalogRequest);if(panel!=null)panel.Close();if(ui!=null)ui.Dispose();}
+ internal void TestClose(){DisposePhotoInventory();if(legacyDisarm!=null)legacyDisarm.Stop();genQueued=false;if(sweepCancel!=null)sweepCancel.Cancel();CancelSlideRequests();ReleaseDisplayPins();PinWallpaper(null);System.Threading.Interlocked.Increment(ref catalogRequest);if(panel!=null)panel.Close();if(ui!=null)ui.Dispose();}
+ internal void TestInventory(PlaylistInventory inventory,Func<DateTime> clock=null){photoInventory=inventory;inventoryDispatcher=Dispatcher.CurrentDispatcher;if(clock!=null)inventoryClock=clock;photoInventory.Changed+=c=>CompleteInventoryRefresh();}
+ internal void TestInventoryUse(){UseSlideshow();}
+ internal void TestInventoryPoll(){CheckRequests();}
+ internal void TestInventoryAdvance(){AdvanceSlide();}
+ internal object TestRotationToken{get{return slideFiles;}}
+ internal object TestSlideWorkToken{get{return slideJob;}}
+ internal bool TestEmpty{get{return showingEmpty;}}
+ internal void TestInventorySeed(string current,string[] files,string[] back,string[] ahead,DateTime countdown){currentSourcePath=current;slideFiles=new List<string>(files);slideBack.Clear();slideBack.AddRange(back);slideAhead.Clear();slideAhead.AddRange(ahead);nextSlide=countdown;}
+ internal string[] TestInventoryHistory{get{return slideBack.Concat(new[]{"|"}).Concat(slideAhead).ToArray();}}
+ internal List<string> TestSources(){return SourceImages();}
+ internal void TestRebuildInventory(){RebuildSlides();}
+ internal int TestRotationSize{get{return slideFiles.Count;}}
+ internal List<Tuple<string,List<string>>> TestInventoryEntries(params string[] entries){return SpatialPhotoEntries(entries);}
+ internal bool TestAheadDone{get{return aheadJob!=null&&aheadJob.Done;}}
  internal void TestCatalog(SpatialCatalog catalog,params string[] photos){ApplySpatialCatalog(catalog,photos.Select(p=>Tuple.Create(p,new List<string>{p})).ToList(),true);}
  internal string TestSpatialPath(string path){return SpatialPathFor(path);}
  internal int TestSpatialSlides{get{return spatialSlides.Count;}}
@@ -125,9 +166,209 @@ static class MatteTests {
  static string SettingsFile{get{return Path.Combine(Here,"settings.json");}}
  static void ClearSettings(){foreach(var x in new[]{"",".bak",".bad",".tmp"})if(File.Exists(SettingsFile+x))File.Delete(SettingsFile+x);}
 
+ static void InventoryIdle(PlaylistInventory inv){Check(System.Threading.SpinWait.SpinUntil(()=>inv.Idle,5000),"inventory worker did not finish");}
+ static void InventoryPass(PlaylistInventory inv,InventoryTestClock clock,double seconds=0,bool force=true){clock.Add(seconds);if(force)inv.Reconcile();inv.Tick();InventoryIdle(inv);}
+ static InventoryPhoto InventoryMember(PlaylistInventory inv,string path){return inv.Snapshot.Entries.SelectMany(e=>e.Members).Single(p=>p.Path==path);}
+ static void InventoryTests(){
+  Run("T4a add remove rename and immutable snapshots",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",a=root+@"\a.jpg",b=root+@"\b.jpg";fs.Put(a);
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);var first=inv.Snapshot;
+    Check(first.ReadyPaths.Count==0&&InventoryMember(inv,a).State==PhotoState.Settling,"new file was ready immediately");InventoryPass(inv,clock,1);Check(inv.Snapshot.ReadyPaths.SequenceEqual(new[]{a}),"stable file absent");Check(first.ReadyPaths.Count==0,"snapshot mutated");
+    fs.Put(b);fs.Emit(root,b);InventoryPass(inv,clock,2,false);Check(!inv.Snapshot.ReadyPaths.Contains(b),"new file skipped settling");InventoryPass(inv,clock,1);Check(inv.Snapshot.ReadyPaths.Count==2,"addition absent");
+    string c=root+@"\c.jpg";fs.Remove(b);fs.Put(c);fs.Emit(root,c,b);InventoryPass(inv,clock,2,false);InventoryPass(inv,clock,1);Check(inv.Snapshot.ReadyPaths.Contains(c)&&!inv.Snapshot.ReadyPaths.Contains(b),"rename not remove plus add");
+    fs.Remove(a);fs.Emit(root,a);InventoryPass(inv,clock,2,false);Check(inv.Snapshot.ReadyPaths.SequenceEqual(new[]{c}),"deletion retained");
+   }
+  });
+  Run("T4a populated directories move in within and out",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",dir=root+@"\incoming",a=dir+@"\a.jpg";fs.Dir(root);
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);
+    fs.Put(a);fs.Emit(root,dir);InventoryPass(inv,clock,2,false);InventoryPass(inv,clock,1);Check(inv.Snapshot.ReadyPaths.Contains(a),"directory move in ignored");
+    string dest=root+@"\renamed",b=dest+@"\a.jpg";fs.Remove(dir);fs.Put(b);fs.Emit(root,dest,dir);InventoryPass(inv,clock,2,false);InventoryPass(inv,clock,1);Check(inv.Snapshot.ReadyPaths.SequenceEqual(new[]{b}),"directory rename ignored");
+    fs.Remove(dest);fs.Emit(root,dest);InventoryPass(inv,clock,2,false);Check(inv.Snapshot.ReadyPaths.Count==0,"directory move out ignored");
+   }
+  });
+  Run("T4a partial and disconnected scans preserve members",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",sub=root+@"\private",a=sub+@"\a.jpg",b=root+@"\b.jpg";fs.Put(a);fs.Put(b);
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);
+    fs.Denied.Add(sub);fs.Remove(b);InventoryPass(inv,clock);Check(inv.Snapshot.ReadyPaths.SequenceEqual(new[]{a})&&inv.Snapshot.UnknownRoots.Contains(sub),"partial scan erased unreadable subtree or retained enumerated deletion");
+    fs.Denied.Add(root);InventoryPass(inv,clock);Check(inv.Snapshot.ReadyPaths.Contains(a)&&inv.Snapshot.UnknownRoots.Contains(root),"disconnected root erased members");
+    fs.Denied.Clear();fs.Remove(root);fs.Denied.Add(@"C:\");InventoryPass(inv,clock);Check(inv.Snapshot.ReadyPaths.Contains(a)&&inv.Snapshot.UnknownRoots.Contains(root),"missing drive treated as deletion");
+    fs.Denied.Clear();InventoryPass(inv,clock);Check(inv.Snapshot.Entries[0].Availability[root]==InventoryAvailability.Absent&&!inv.Snapshot.ReadyPaths.Any(),"confirmed absence not applied");
+   }
+  });
+  Run("T4a exclusions revision and restore",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",a=root+@"\skip\a.jpg";fs.Put(a);
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);long rev=inv.Snapshot.Revision;
+    fs.Denied.Add(root);inv.SetExclusions(new[]{"skip"});InventoryPass(inv,clock);Check(inv.Snapshot.Revision>rev&&!inv.Snapshot.ReadyPaths.Any(),"excluded directory survived unavailable root");
+    fs.Denied.Clear();inv.SetExclusions(new string[0]);InventoryPass(inv,clock);InventoryPass(inv,clock,1);Check(inv.Snapshot.ReadyPaths.Contains(a),"removed exclusion not restored");
+   }
+  });
+  Run("T4a exclusion file changes are read off UI",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",a=root+@"\skip\a.jpg",ex=@"C:\app\excluded-folders.txt";fs.Put(a);fs.Put(ex,1,FileAttributes.Normal,System.Text.Encoding.UTF8.GetBytes("skip\n"));
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),ex,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock);Check(!inv.Snapshot.ReadyPaths.Any(),"initial exclusion race");
+    fs.Remove(ex);InventoryPass(inv,clock,2);InventoryPass(inv,clock);InventoryPass(inv,clock,1);Check(inv.Snapshot.ReadyPaths.Contains(a)&&fs.UIEnumerations==0,"exclusion deletion not reconciled");
+   }
+  });
+  Run("T4a stale playlist and exclusion revisions discarded",()=>{
+   foreach(bool exclusion in new[]{false,true}){
+    var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",a=root+@"\skip\a.jpg";fs.Put(a);
+    using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);long seq=inv.Snapshot.Sequence;
+     fs.BlockPath=root;inv.Reconcile();inv.Tick();Check(fs.Entered.WaitOne(2000),"scan barrier not reached");
+     if(exclusion)inv.SetExclusions(new[]{"skip"});else inv.Configure(new string[0]);long revision=inv.Snapshot.Revision,changed=inv.Snapshot.Sequence;
+     fs.Release.Set();InventoryIdle(inv);Check(inv.Snapshot.Revision==revision&&inv.Snapshot.Sequence==changed,"stale scan published");
+     if(exclusion){InventoryPass(inv,clock);Check(!inv.Snapshot.ReadyPaths.Any(),"old exclusion scan resurrected photo");}else Check(!inv.Snapshot.ReadyPaths.Any(),"removed playlist entry resurrected");
+    }
+   }
+  });
+  Run("T4a newer event wins over an in-flight scan",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",a=root+@"\a.jpg";fs.Put(a);
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);
+    fs.BlockPath=root;inv.Reconcile();inv.Tick();Check(fs.Entered.WaitOne(2000),"scan barrier not reached");fs.Put(a,2);fs.Emit(root,a);fs.Release.Set();InventoryIdle(inv);
+    Check(InventoryMember(inv,a).State==PhotoState.Settling,"scan overwrote newer event");InventoryPass(inv,clock,2);InventoryPass(inv,clock,1);Check(InventoryMember(inv,a).Mtime==2&&inv.Snapshot.ReadyPaths.Contains(a),"new bytes never reconciled");
+   }
+  });
+  Run("T4a watcher error recreates and rescans",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",a=root+@"\a.jpg";fs.Dir(root);
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);var watch=fs.Hooks[root];fs.Put(a);fs.Error(root);InventoryPass(inv,clock,0,false);
+    Check(watch.Closed&&InventoryMember(inv,a).State==PhotoState.Settling,"watcher error did not dispose/rescan");InventoryPass(inv,clock,60,false);Check(fs.Watches>=2&&!fs.Hooks[root].Closed&&inv.Snapshot.ReadyPaths.Contains(a),"watcher not recreated");
+   }
+  });
+  Run("T4a reconnect replaces dead watcher and revision waits for scans",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",a=root+@"\a.jpg";fs.Put(a);
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);var original=fs.Hooks[root];
+    fs.Denied.Add(root);InventoryPass(inv,clock);Check(original.Closed,"disconnected root kept its stale watcher");fs.Denied.Clear();inv.Reconcile(true);InventoryPass(inv,clock,0,false);Check(!fs.Hooks[root].Closed&&fs.Watches>=2,"resume failed to replace watcher");
+    inv.SetExclusions(new[]{"skip"});Check(!inv.Snapshot.Scanned,"old root marked scanned under new exclusion revision");InventoryPass(inv,clock);Check(inv.Snapshot.Scanned,"new revision never completed");
+   }
+  });
+  Run("T4a no watcher polling and healthy periodic fallback",()=>{
+   foreach(bool fail in new[]{false,true}){var fs=new InventoryTestFS{FailWatch=fail};var clock=new InventoryTestClock();string root=@"C:\photos",a=root+@"\a.jpg";fs.Dir(root);
+    using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);int scans=fs.Scans;fs.Put(a);InventoryPass(inv,clock,fail?59:599,false);Check(fs.Scans==scans,"periodic scan ran early");
+     InventoryPass(inv,clock,1,false);Check(fs.Scans>scans,"polling failed without event");InventoryPass(inv,clock,1);Check(inv.Snapshot.ReadyPaths.Contains(a),"polling did not settle addition");
+     if(fail){scans=fs.Scans;InventoryPass(inv,clock,60,false);Check(fs.Scans>scans,"healthy no-watcher root backed off beyond sixty seconds");}}
+   }
+  });
+  Run("T4a continuous events flush within fifteen seconds",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos";fs.Dir(root);
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);int before=fs.Scans;
+    for(int i=0;i<=15;i++){if(i>0)clock.Add(1);string p=root+"\\p"+i+".jpg";fs.Put(p);fs.Emit(root,p);inv.Tick();InventoryIdle(inv);}
+    Check(inv.Snapshot.Entries[0].Members.Count==16,"trailing debounce starved reconciliation");
+   }
+  });
+  Run("T4a chunks stability and same-path replacement",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",a=root+@"\a.jpg";fs.Put(a,1,FileAttributes.Normal,new byte[]{255});var changes=new List<InventoryChange>();
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Changed+=changes.Add;inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,2);Check(!inv.Snapshot.ReadyPaths.Any(),"incomplete header ready");
+    fs.Put(a,2);fs.Emit(root,a);InventoryPass(inv,clock,2);Check(!inv.Snapshot.ReadyPaths.Any(),"first changed observation ready");InventoryPass(inv,clock,.9);Check(!inv.Snapshot.ReadyPaths.Any(),"settled before one second");InventoryPass(inv,clock,.1);Check(inv.Snapshot.ReadyPaths.Contains(a),"stable chunks not ready");
+    changes.Clear();fs.Put(a,2);fs.Emit(root,a);Check(InventoryMember(inv,a).State==PhotoState.Settling&&changes.Any(c=>c.Changed.Contains(a)&&!c.Added.Contains(a)),"same-stamp event did not invalidate ready photo");
+    InventoryPass(inv,clock,2);InventoryPass(inv,clock,1);Check(inv.Snapshot.ReadyPaths.Count==1&&changes.All(c=>!c.Added.Contains(a)),"replacement duplicated membership");
+   }
+  });
+  Run("T4a dirty file avoids unrelated directory walks",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",a=root+@"\a.jpg";fs.Put(a);fs.Put(root+@"\large\b.jpg");
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);int scans=fs.Scans;
+    fs.Put(a,2);fs.Emit(root,a);InventoryPass(inv,clock,2,false);InventoryPass(inv,clock,1,false);Check(fs.Scans==scans&&InventoryMember(inv,a).State==PhotoState.Ready,"file event walked the library");
+   }
+  });
+  Run("T4a placeholder never opened ordinary reparse allowed",()=>{
+   foreach(FileAttributes attr in new[]{(FileAttributes)0x1000,(FileAttributes)0x40000,(FileAttributes)0x400000,FileAttributes.ReparsePoint}){
+    var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",a=root+@"\a.jpg";fs.Put(a,1,attr);
+    using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);
+     if(attr==FileAttributes.ReparsePoint)Check(fs.Opens>0&&inv.Snapshot.ReadyPaths.Contains(a),"ordinary reparse file rejected");else Check(fs.Opens==0&&InventoryMember(inv,a).State==PhotoState.Unreadable&&!inv.Snapshot.ReadyPaths.Any(),"placeholder opened or ready");
+    }
+   }
+  });
+  Run("T4a cloud gates catalogue probe hash and prefetch",()=>{
+   var fs=new InventoryTestFS();string photo=@"C:\photos\cloud.jpg",store=Fresh("inventory-cloud");fs.Put(photo,1,(FileAttributes)0x400000);
+   var catalog=SpatialCatalog.Load(store,new[]{photo},null,null,fs);Check(catalog.Photos[photo].Status==SpatialCatalog.State.Error&&fs.Opens==0,"catalogue probe opened cloud file");
+   catalog=SpatialCatalog.Load(store,new[]{photo},null,p=>null,fs).Complete(()=>false);Check(catalog.Photos[photo].Status==SpatialCatalog.State.Error&&fs.Opens==0,"catalogue hash opened cloud file");
+   var app=new App(new TestWall()){TestSettings=new MatteSettings{Playlist=new List<string>{photo}},prefetchFiles=fs};try{app.TestAhead(photo);Until(()=>app.TestAheadDone,"prefetch did not finish");Check(fs.Opens==0,"prefetch opened cloud file");}finally{app.TestClose();}
+  });
+  Run("T4a UI snapshot readers do not enumerate and explicit errors remain",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\photos",a=root+@"\a.jpg",cloud=@"C:\single\cloud.jpg";fs.Put(a);fs.Put(cloud,1,(FileAttributes)0x1000);
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{root,cloud});InventoryPass(inv,clock);InventoryPass(inv,clock,1);
+    var app=new App(new TestWall());app.TestInventory(inv);int before=fs.Scans;Check(app.TestSources().SequenceEqual(new[]{a}),"SourceImages ignored snapshot");var per=app.TestInventoryEntries(root,cloud);Check(per[0].Item2.Contains(a)&&per[1].Item2.Contains(cloud),"catalogue lost ready or explicit unreadable entry");Check(fs.Scans==before&&fs.UIEnumerations==0,"UI enumerated disk");app.TestClose();
+   }
+  });
+  Run("T4a slow root independent and no overlapping scan",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();string slow=@"C:\slow",fast=@"C:\fast",a=fast+@"\a.jpg";fs.Dir(slow);fs.Put(a);fs.BlockPath=slow;
+   using(var inv=new PlaylistInventory(fs,clock.Now,x=>x(),null,false)){inv.Configure(new[]{slow,fast});inv.Tick();Check(fs.Entered.WaitOne(2000),"slow root did not start");
+    Check(System.Threading.SpinWait.SpinUntil(()=>inv.Snapshot.Entries.Any(e=>e.Path==fast&&e.Scanned),2000),"slow root blocked fast root");int before=fs.Scans;inv.Reconcile();inv.Tick();
+    Check(System.Threading.SpinWait.SpinUntil(()=>inv.Snapshot.Sequence>=3,2000),"fast root unavailable");Check(fs.Scans<=before+1,"overlapping slow scan");fs.Release.Set();InventoryIdle(inv);
+   }
+  });
+  Run("T4a bounded dispatch queue and watcher disposal",()=>{
+   var fs=new InventoryTestFS();var clock=new InventoryTestClock();var queued=new List<Action>();string root=@"C:\photos";fs.Dir(root);var inv=new PlaylistInventory(fs,clock.Now,a=>queued.Add(a),null,false);int delivered=0;inv.Changed+=c=>delivered++;
+   inv.Configure(new[]{root});InventoryPass(inv,clock);for(int i=0;i<1000;i++)fs.Emit(root,root+"\\"+i+".jpg");Check(queued.Count==1,"event storm flooded UI queue");inv.Dispose();queued[0]();Check(delivered==0&&fs.Hooks[root].Closed,"disposed inventory delivered or leaked watcher");
+  });
+  Run("T4a real watcher observes populated directory rename",()=>{
+   string root=Fresh("inventory-watch"),outside=Fresh("inventory-outside"),source=Path.Combine(outside,"incoming"),dest=Path.Combine(root,"incoming"),renamed=Path.Combine(root,"renamed");Directory.CreateDirectory(source);File.WriteAllBytes(Path.Combine(source,"a.jpg"),new byte[]{255,216,255});
+   var events=new System.Collections.Concurrent.ConcurrentQueue<string>();using(var watch=new PhotoFileSystem().Watch(root,(p,old)=>{events.Enqueue(p);if(old!=null)events.Enqueue(old);},()=>{})){
+    Directory.Move(source,dest);Until(()=>events.Contains(dest),"real directory create not observed");Directory.Move(dest,renamed);Until(()=>events.Contains(renamed),"real directory rename not observed");Directory.Move(renamed,source);Until(()=>events.Count(p=>p==renamed)>=2,"real directory deletion not observed");
+   }
+  });
+  Run("T4a asynchronous startup and explicit rebuild without live merge",()=>{
+   string root=Fresh("inventory-startup"),a=Path.Combine(root,"a.bmp"),b=Path.Combine(root,"b.bmp");Bmp(a,Color.Red);string saved=File.Exists(SettingsFile)?File.ReadAllText(SettingsFile):null;
+   File.WriteAllText(SettingsFile,new JavaScriptSerializer().Serialize(new MatteSettings{Playlist=new List<string>{root},SpatialFolder=Fresh("inventory-startup-store")}));
+   using(var sink=new SlideSink()){var app=new App(new TestWall());app.presentSlide=sink.Show;
+    try{app.TestInit();Until(()=>app.TestSnapshot!=null,"startup did not consume asynchronous inventory");Check(app.TestRotationSize==1,"startup rotation missing photo");
+     Bmp(b,Color.Blue);Until(()=>app.TestSources().Count==2,"watcher addition not exposed",8000);Check(app.TestRotationSize==1,"T4a merged a live addition");app.TestRebuildInventory();Check(app.TestRotationSize==2,"explicit rebuild ignored maintained set");
+    }finally{app.TestClose();if(saved==null)ClearSettings();else File.WriteAllText(SettingsFile,saved);}
+   }
+  });
+ }
+
+ static void InventoryWaitTests(){
+  foreach(bool startup in new[]{true,false}){bool start=startup;Run("R17 delayed "+(start?"startup":"playlist edit")+" preserves display history and countdown",()=>{
+   string root=Fresh(start?"r17-start":"r17-edit"),a=Path.Combine(root,"a.bmp"),b=Path.Combine(root,"b.bmp");Bmp(a,Color.Red);Bmp(b,Color.Blue);
+   var fs=new InventoryTestFS{BlockPath=root};fs.Put(a);fs.Put(b);var clock=new InventoryTestClock();var dispatcher=Dispatcher.CurrentDispatcher;
+   var settings=new MatteSettings{Playlist=new List<string>{root},SpatialFolder=Fresh(start?"r17-start-store":"r17-edit-store")};string saved=File.Exists(SettingsFile)?File.ReadAllText(SettingsFile):null;
+   using(var inv=new PlaylistInventory(fs,clock.Now,action=>dispatcher.BeginInvoke(action),null,false))using(var sink=new SlideSink()){
+    var wall=new TestWall{Wallpaper=a};var app=new App(wall){TestSettings=settings};app.presentSlide=sink.Show;app.TestInventory(inv,clock.Now);
+    try{
+     if(!start){app.TestShow(a);Until(()=>app.TestSnapshot!=null,"initial photo did not present");}
+     DateTime countdown=DateTime.Now.AddMinutes(10);app.TestInventorySeed(start?null:a,start?new string[0]:new[]{a,b},new[]{b},new[]{b},countdown);
+     object rotation=app.TestRotationToken,job=app.TestSlideWorkToken;string[] history=app.TestInventoryHistory;int wallChanges=wall.WallpaperSets,presentations=sink.Events.Count;
+     if(start){File.WriteAllText(SettingsFile,new JavaScriptSerializer().Serialize(settings));app.TestInit();}else app.TestRebuildInventory();
+     inv.Tick();Check(fs.Entered.WaitOne(2000),"delayed scan did not start");app.TestInventoryPoll();app.TestInventoryAdvance();
+     Check(!app.TestEmpty&&wall.Wallpaper==a&&wall.WallpaperSets==wallChanges&&sink.Events.Count==presentations,"unscanned playlist changed wallpaper");
+     Check(app.TestInventoryHistory.SequenceEqual(history)&&app.TestCountdown==countdown&&ReferenceEquals(rotation,app.TestRotationToken)&&ReferenceEquals(job,app.TestSlideWorkToken),"waiting consumed history, countdown, rotation or slide work");
+     fs.Release.Set();InventoryIdle(inv);Pump(30);Check(ReferenceEquals(rotation,app.TestRotationToken)&&!app.TestEmpty,"first unsettled observation was treated as empty");
+     InventoryPass(inv,clock,1,false);Until(()=>!ReferenceEquals(rotation,app.TestRotationToken),"completed inventory did not rebuild");Check(app.TestRotationSize==2,"completed rebuild missed photos");
+     if(!start)Check(app.TestInventoryHistory.SequenceEqual(history)&&app.TestCountdown==countdown,"completed edit lost surviving history or countdown");
+     object once=app.TestRotationToken;InventoryPass(inv,clock,2);Pump(30);app.TestInventoryPoll();Check(ReferenceEquals(once,app.TestRotationToken),"completed revision rebuilt more than once");
+    }finally{fs.Release.Set();app.TestClose();if(saved==null)ClearSettings();else File.WriteAllText(SettingsFile,saved);}
+   }
+  });}
+  Run("R17 scanned empty clears display but unknown inventory does not",()=>{
+   foreach(bool unknown in new[]{false,true}){var fs=new InventoryTestFS();var clock=new InventoryTestClock();string root=@"C:\r17-empty";fs.Dir(root);if(unknown)fs.Denied.Add(root);var dispatcher=Dispatcher.CurrentDispatcher;
+    using(var inv=new PlaylistInventory(fs,clock.Now,action=>dispatcher.BeginInvoke(action),null,false)){
+     var wall=new TestWall{Wallpaper="existing-wallpaper"};var app=new App(wall){TestSettings=new MatteSettings{Playlist=new List<string>{root}}};app.TestInventory(inv,clock.Now);
+     try{app.TestInventorySeed(null,new string[0],new[]{"back"},new[]{"ahead"},DateTime.Now.AddMinutes(10));app.TestInventoryUse();Check(!app.TestEmpty&&wall.WallpaperSets==0,"empty result inferred before scan");
+      InventoryPass(inv,clock);Pump(30);app.TestInventoryPoll();
+      if(unknown)Check(!app.TestEmpty&&wall.WallpaperSets==0&&app.TestInventoryHistory.Length==3,"unknown root treated as empty");
+      else Check(app.TestEmpty&&wall.WallpaperSets==1&&Path.GetFileName(wall.Wallpaper)=="matte-empty.png"&&app.TestInventoryHistory.SequenceEqual(new[]{"|"}),"genuine scanned empty playlist no longer clears");
+     }finally{app.TestClose();}
+    }
+   }
+  });
+  Run("R17 slow root permits one partial start after grace period",()=>{
+   string local=Fresh("r17-local"),slow=Fresh("r17-slow"),a=Path.Combine(local,"a.bmp"),b=Path.Combine(slow,"b.bmp");Bmp(a,Color.Red);Bmp(b,Color.Blue);
+   var fs=new InventoryTestFS{BlockPath=slow};fs.Put(a);fs.Put(b);var clock=new InventoryTestClock();var dispatcher=Dispatcher.CurrentDispatcher;
+   using(var inv=new PlaylistInventory(fs,clock.Now,action=>dispatcher.BeginInvoke(action),null,false))using(var sink=new SlideSink()){
+    var wall=new TestWall{Wallpaper=a};var app=new App(wall){TestSettings=new MatteSettings{Playlist=new List<string>{slow,local},SpatialFolder=Fresh("r17-partial-store")}};app.presentSlide=sink.Show;app.TestInventory(inv,clock.Now);
+    try{app.TestInventoryUse();object before=app.TestRotationToken;inv.Tick();Check(fs.Entered.WaitOne(2000),"slow root not blocked");Until(()=>inv.Snapshot.Entries.Any(e=>e.Path==local&&e.Scanned),"local root blocked by network");
+     clock.Add(1);inv.Tick();Until(()=>inv.Snapshot.ReadyPaths.Contains(a),"local file did not settle");app.TestInventoryPoll();Check(ReferenceEquals(before,app.TestRotationToken)&&wall.WallpaperSets==0,"unscanned revision did not preserve wallpaper during grace");
+     clock.Add(2.1);app.TestInventoryPoll();Until(()=>app.TestSnapshot!=null,"slow root prevented local playback after grace");Check(app.TestRotationSize==1&&!inv.Snapshot.Scanned&&!app.TestEmpty,"partial start waited for slow root or showed empty");object once=app.TestRotationToken;
+     fs.Release.Set();InventoryIdle(inv);InventoryPass(inv,clock,1,false);Pump(30);app.TestInventoryPoll();Check(inv.Snapshot.ReadyPaths.Count==2&&ReferenceEquals(once,app.TestRotationToken)&&app.TestRotationSize==1,"late root restarted rotation instead of waiting for T4b");
+    }finally{fs.Release.Set();app.TestClose();}
+   }
+  });
+ }
+
  [STAThread] static int Main(string[] args){
   if(args.Length>=2&&(args[0]=="--native-validate"||args[0]=="--native-fault"))return NativeChild(args);
   if(args.Contains("--native")){NativeTests();return failures;}
+  if(args.Contains("--inventory-wait")){InventoryWaitTests();return failures;}
+  if(args.Contains("--inventory")){InventoryTests();InventoryWaitTests();return failures;}
   if(args.Length==3&&args[0]=="--hold-lock"){using(SpatialStoreLock.Acquire(args[1],3000)){Console.WriteLine("LOCKED");Console.Out.Flush();System.Threading.Thread.Sleep(int.Parse(args[2]));}return 0;}
   if(args.Contains("--format")){FormatTests();return failures;}
   if(args.Contains("--fallback")){FallbackTests();return failures;}
@@ -139,7 +380,7 @@ static class MatteTests {
   if(args.Contains("--retention")){RetentionTests();return failures;}
   if(args.Contains("--store-page")){StorePageTests();return failures;}
   IdentityTests();if(args.Contains("--identity"))return failures;
-  StoreTests();
+  InventoryTests();InventoryWaitTests();StoreTests();
   LockTests();
   CatalogTests();NativeTests();AttachTests();FallbackTests();CacheTests();RetentionTests();StorePageTests();
   // ② the store page's sweep runs once, not again and again

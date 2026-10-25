@@ -39,15 +39,13 @@ partial class App {
  static string SizeText(double bytes){double mb=bytes/1048576;return mb<1000?"约 "+Math.Max(1,Math.Round(mb))+" MB":"约 "+(mb/1024).ToString("0.0")+" GB";}
  // Enumerated on the catalogue worker, from a snapshot of playlist entries. Explicit unreadable photos stay listed.
  List<Tuple<string,List<string>>> SpatialPhotoEntries(IEnumerable<string> entries){
-  var excluded=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-  string ex=Path.Combine(Dir,"excluded-folders.txt");if(File.Exists(ex))foreach(string line in File.ReadAllLines(ex)){string n=line.Trim().TrimEnd('\\');if(n.Length>0&&!n.StartsWith("#"))excluded.Add(Path.GetFileName(n));}
   var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);var per=new List<Tuple<string,List<string>>>();
+  var snapshot=photoInventory==null?null:photoInventory.Snapshot;
   foreach(string entry in entries){var imgs=new List<string>();
-   if(!Directory.Exists(entry)&&IsImage(entry)){if(seen.Add(entry))imgs.Add(entry);}
-   else if(Directory.Exists(entry)){var pending=new Stack<string>();pending.Push(entry);
-    while(pending.Count>0){string dir=pending.Pop();
-     try{foreach(string f in Directory.GetFiles(dir))if(IsImage(f)&&seen.Add(f))imgs.Add(f);
-      foreach(string d in Directory.GetDirectories(dir))if(!excluded.Contains(Path.GetFileName(d)))pending.Push(d);}catch(IOException){}catch(UnauthorizedAccessException){}}}
+   var root=snapshot==null?null:snapshot.Entries.FirstOrDefault(e=>string.Equals(e.Path,entry,StringComparison.OrdinalIgnoreCase));
+   if(root!=null)foreach(var photo in root.Members)if(photo.State==PhotoState.Ready&&seen.Add(photo.Path))imgs.Add(photo.Path);
+   // Preserve explicit unreadable/missing entries for catalogue error counts; settling files are not hashed.
+   if((root==null||!root.Directory)&&IsImage(entry)&&(root==null||!root.Members.Any(p=>p.State==PhotoState.Settling))&&seen.Add(entry))imgs.Add(entry);
    per.Add(Tuple.Create(entry,imgs));}return per;
  }
  List<EntryNeeds> SpatialNeedsByEntry(){return spatialNeeds??new List<EntryNeeds>();}

@@ -88,7 +88,7 @@ partial class App {
  void PlaylistChanged(){SaveSettings();try{RebuildSlides();}catch(Exception e){Log("Playlist: "+e.Message);}}
  // A new rotation from the playlist without re-showing the photo on screen; it moves on only if that photo left the list.
  void RebuildSlides(){
-  var files=RotationFiles();
+  List<string> files;if(!TryRotationFiles(out files))return;
   if(files.Count==0){ShowEmpty();return;}
   ArrangeRotation(files);
   var inList=new HashSet<string>(files,StringComparer.OrdinalIgnoreCase);

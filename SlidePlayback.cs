@@ -20,11 +20,12 @@ partial class App {
   return spatialEnabled&&!spatialFlat&&!spatialPaused&&spatialCatalog!=null&&spatialCatalog.Photos.TryGetValue(path,out p)&&p.Status==SpatialCatalog.State.Hinted&&p.Pair!=null&&!rejections.Contains(SpatialContent.Digest(p.Pair))?p.Pair:null;
  }
  static bool SamePair(SpatialIdentity.Pair a,SpatialIdentity.Pair b){return a==null?b==null:b!=null&&a.SourceSha==b.SourceSha&&a.RecipeSha==b.RecipeSha&&a.Artifact==b.Artifact&&SpatialContent.Digest(a)==SpatialContent.Digest(b);}
- SlideJob MakeSlideJob(string path,SlideSnapshot reuse){
+ internal IPhotoFileSystem prefetchFiles=new PhotoFileSystem();
+ SlideJob MakeSlideJob(string path,SlideSnapshot reuse,bool prefetch=false){
   var job=new SlideJob(++slideRequest,path,BackgroundMode,AmbientScreen,PairFor(path),HintFor(path));var dispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;
   var colors=new Dictionary<string,uint>(overrides,StringComparer.OrdinalIgnoreCase);
   Action changed=()=>{try{if(dispatcher.HasShutdownStarted){job.Dispose();return;}dispatcher.BeginInvoke(new Action(()=>{if(ReferenceEquals(job,slideJob))SlideProgress(job);else if(!ReferenceEquals(job,aheadJob))job.Dispose();}));}catch{job.Dispose();}};
-  job.Start(()=>{var image=reuse==null?new SlideSnapshot(path,File.ReadAllBytes(path)):reuse.Copy();try{image.MakeDisplay(DisplayCacheDir);uint color;
+  job.Start(()=>{var image=reuse==null?new SlideSnapshot(path,prefetch?PhotoReadPolicy.Read(prefetchFiles,path):File.ReadAllBytes(path)):reuse.Copy();try{image.MakeDisplay(DisplayCacheDir);uint color;
     image.Color=colors.TryGetValue(path,out color)||colors.TryGetValue(image.Display,out color)?color:AutoColor(image.Display);return image;}catch{image.Dispose();throw;}},
    image=>{string backdrop;image.Wallpaper=WallpaperImage(image,job.Mode,job.Screen,out backdrop);image.Backdrop=backdrop;},changed,verified=>{if(job.Cancelled)return;var image=verified.Image;if((verified.Pair!=null||verified.ArtifactInvalid)&&image.Wallpaper==image.Display){image.MakeDisplay(DisplayCacheDir,true);image.Wallpaper=image.Display;}
     if(beforeVerifyDelivery!=null)beforeVerifyDelivery(verified);});
@@ -116,6 +117,6 @@ partial class App {
  void PrepareNextSlide(){
   if(slideFiles.Count==0)return;string next=slideAhead.Count>0?slideAhead[slideAhead.Count-1]:slideFiles[slideIndex%slideFiles.Count];
   if(next==currentSourcePath)return; // Do not retain an old snapshot of a single-photo rotation across edits.
-  if(aheadJob!=null)aheadJob.Dispose();aheadJob=MakeSlideJob(next,null);
+  if(aheadJob!=null)aheadJob.Dispose();aheadJob=MakeSlideJob(next,null,true);
  }
 }

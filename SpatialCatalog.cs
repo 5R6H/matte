@@ -23,7 +23,7 @@ sealed class SpatialCatalog {
  internal int Valid,Unsupported,Invalid,Unreadable,Legacy,Bad;internal long Bytes;
  internal readonly string Store,Desired;
  readonly HashSet<string> repairs=new HashSet<string>(StringComparer.Ordinal);
- Dictionary<string,Hint> hints;readonly Func<string,Hint> probe;
+ Dictionary<string,Hint> hints;readonly Func<string,Hint> probe;readonly IPhotoFileSystem sourceFiles;
  readonly HashSet<string> hashErrors=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
  static readonly Regex Digest=new Regex(@"\A[0-9a-f]{64}\z");
  static readonly Regex PairName=new Regex(@"\A[0-9a-f]{64}\.spatial\.json\z");
@@ -32,15 +32,16 @@ sealed class SpatialCatalog {
  static Hint Stamp(FileStream file){Info i;if(!GetFileInformationByHandle(file.SafeFileHandle,out i))return null;
   long time=((long)(uint)i.Written.dwHighDateTime<<32)|(uint)i.Written.dwLowDateTime;
   return new Hint{size=((long)i.SizeHigh<<32)|i.SizeLow,mtimeTicks=DateTime.FromFileTimeUtc(time).Ticks,fileId=i.IdHigh.ToString("x8")+i.IdLow.ToString("x8"),volumeSerial=i.Volume.ToString("x8")};}
- internal static Hint Probe(string path){using(var f=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))return Stamp(f);}
+ internal static Hint Probe(string path){return Probe(path,new PhotoFileSystem());}
+ static Hint Probe(string path,IPhotoFileSystem fs){using(var f=PhotoReadPolicy.Open(fs,path))return Stamp((FileStream)f);}
  static bool Same(Hint a,Hint b){return a!=null&&b!=null&&a.fileId!=null&&a.volumeSerial!=null&&b.fileId!=null&&b.volumeSerial!=null&&a.size==b.size&&a.mtimeTicks==b.mtimeTicks&&a.fileId==b.fileId&&a.volumeSerial==b.volumeSerial;}
  static string Hash(Stream stream){using(var sha=SHA256.Create())return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-","").ToLowerInvariant();}
- SpatialCatalog(string store,string desired,Func<string,Hint> stat){Store=store;Desired=desired;probe=stat??Probe;}
- internal static SpatialCatalog Load(string store,IEnumerable<string> photos,string desired,Func<string,Hint> stat=null){
-  return Read(store,photos,desired,stat,null);
+ SpatialCatalog(string store,string desired,Func<string,Hint> stat,IPhotoFileSystem files=null){Store=store;Desired=desired;sourceFiles=files??new PhotoFileSystem();probe=stat??(p=>Probe(p,sourceFiles));}
+ internal static SpatialCatalog Load(string store,IEnumerable<string> photos,string desired,Func<string,Hint> stat=null,IPhotoFileSystem files=null){
+  return Read(store,photos,desired,stat,null,files);
  }
- static SpatialCatalog Read(string store,IEnumerable<string> photos,string desired,Func<string,Hint> stat,Dictionary<string,Hint> known){
-  var c=new SpatialCatalog(store,desired,stat);if(known==null)c.ReadIndex();else c.hints=new Dictionary<string,Hint>(known,StringComparer.OrdinalIgnoreCase);c.Inventory();c.CountRepairs();
+ static SpatialCatalog Read(string store,IEnumerable<string> photos,string desired,Func<string,Hint> stat,Dictionary<string,Hint> known,IPhotoFileSystem files){
+  var c=new SpatialCatalog(store,desired,stat,files);if(known==null)c.ReadIndex();else c.hints=new Dictionary<string,Hint>(known,StringComparer.OrdinalIgnoreCase);c.Inventory();c.CountRepairs();
   foreach(string path in photos.Distinct(StringComparer.OrdinalIgnoreCase)){
    var p=new Photo{Status=State.Unchecked,Needs=true};c.Photos[path]=p;
    try{Hint h;var stamp=c.probe(path);if(c.hints.TryGetValue(path,out h)&&Same(h,stamp)&&Digest.IsMatch(h.sha256??"")){
@@ -77,16 +78,16 @@ sealed class SpatialCatalog {
  // The app schedules one worker at a time. Hash with a read-only sharing handle; never keep photo buffers.
  internal void HashMissing(Func<bool> cancelled){
   foreach(var kv in Photos){if(cancelled())break;if(kv.Value.Status!=State.Unchecked)continue;
-   try{using(var f=new FileStream(kv.Key,FileMode.Open,FileAccess.Read,FileShare.Read)){
+   try{using(var input=PhotoReadPolicy.Open(sourceFiles,kv.Key)){var f=(FileStream)input;
      var before=Stamp(f);string hash=Hash(f);var after=Stamp(f);
      if(Same(before,after)&&Same(after,probe(kv.Key))){after.sha256=hash;hints[kv.Key]=after;}
     }}catch(IOException){hashErrors.Add(kv.Key);}catch(UnauthorizedAccessException){hashErrors.Add(kv.Key);}catch(System.Security.SecurityException){hashErrors.Add(kv.Key);}
   }SaveIndex();
  }
  // The worker never shares mutable hints/photos with the UI catalogue it has just published.
- internal SpatialCatalog CopyForHash(){var copy=new SpatialCatalog(Store,Desired,probe);copy.hints=new Dictionary<string,Hint>(hints,StringComparer.OrdinalIgnoreCase);
+ internal SpatialCatalog CopyForHash(){var copy=new SpatialCatalog(Store,Desired,probe,sourceFiles);copy.hints=new Dictionary<string,Hint>(hints,StringComparer.OrdinalIgnoreCase);
   foreach(var p in Photos)copy.Photos[p.Key]=new Photo{Status=p.Value.Status,Digest=p.Value.Digest,Pair=p.Value.Pair,Needs=p.Value.Needs};return copy;}
- internal SpatialCatalog Complete(Func<bool> cancelled){HashMissing(cancelled);var next=Read(Store,Photos.Keys,Desired,probe,hints);
+ internal SpatialCatalog Complete(Func<bool> cancelled){HashMissing(cancelled);var next=Read(Store,Photos.Keys,Desired,probe,hints,sourceFiles);
   foreach(string path in hashErrors){next.Photos[path].Status=State.Error;next.Photos[path].Pair=null;next.Photos[path].Needs=true;}return next;}
  internal void DropHint(string path){hints.Remove(path);Photo p;if(Photos.TryGetValue(path,out p)){p.Status=State.Unchecked;p.Digest=null;p.Pair=null;p.Needs=true;}}
  // A failed identity/read check invalidates a cheap catalogue hint, not the expected artifact digest.
