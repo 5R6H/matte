@@ -88,7 +88,7 @@ partial class App {
   page="spatialstore";RefreshStore();
  }
  internal void TestClose(){DisposePhotoInventory();if(legacyDisarm!=null)legacyDisarm.Stop();genQueued=false;if(sweepCancel!=null)sweepCancel.Cancel();CancelSlideRequests();ReleaseDisplayPins();PinWallpaper(null);System.Threading.Interlocked.Increment(ref catalogRequest);if(panel!=null)panel.Close();if(ui!=null)ui.Dispose();}
- internal void TestInventory(PlaylistInventory inventory,Func<DateTime> clock=null){photoInventory=inventory;inventoryDispatcher=Dispatcher.CurrentDispatcher;if(clock!=null)inventoryClock=clock;photoInventory.Changed+=c=>CompleteInventoryRefresh();}
+ internal void TestInventory(PlaylistInventory inventory,Func<DateTime> clock=null){photoInventory=inventory;inventoryDispatcher=Dispatcher.CurrentDispatcher;if(clock!=null)inventoryClock=clock;photoInventory.Changed+=OnInventoryChanged;}
  internal void TestInventoryUse(){UseSlideshow();}
  internal void TestInventoryPoll(){CheckRequests();}
  internal void TestInventoryAdvance(){AdvanceSlide();}
@@ -100,6 +100,15 @@ partial class App {
  internal List<string> TestSources(){return SourceImages();}
  internal void TestRebuildInventory(){RebuildSlides();}
  internal int TestRotationSize{get{return slideFiles.Count;}}
+ internal string[] TestRotationPaths{get{return slideFiles.ToArray();}}
+ internal long TestRound{get{return slideRound;}}
+ internal SlideJob TestAheadWork{get{return aheadJob;}}
+ internal SlideJob TestCurrentWork{get{return slideJob;}}
+ internal void TestPrevious(){PreviousSlide();}
+ internal string TestTakeCandidate(bool wrap=true){return TakeRotationCandidate(wrap);}
+ internal void TestMerge(InventorySnapshot snapshot){MergeInventory(snapshot);}
+ internal Comparison<string> TestPhotoComparison(){return PhotoComparison();}
+ internal void TestRotationSetup(string[] files,int cursor,InventorySnapshot snapshot=null,int seed=1){slideFiles=new List<string>(files);slideIndex=cursor;random=new Random(seed);rotationEstablished=true;rotationInventory=snapshot??(photoInventory==null?null:photoInventory.Snapshot);failedThisRound.Clear();}
  internal List<Tuple<string,List<string>>> TestInventoryEntries(params string[] entries){return SpatialPhotoEntries(entries);}
  internal bool TestAheadDone{get{return aheadJob!=null&&aheadJob.Done;}}
  internal void TestCatalog(SpatialCatalog catalog,params string[] photos){ApplySpatialCatalog(catalog,photos.Select(p=>Tuple.Create(p,new List<string>{p})).ToList(),true);}
@@ -305,12 +314,12 @@ static class MatteTests {
     Directory.Move(source,dest);Until(()=>events.Contains(dest),"real directory create not observed");Directory.Move(dest,renamed);Until(()=>events.Contains(renamed),"real directory rename not observed");Directory.Move(renamed,source);Until(()=>events.Count(p=>p==renamed)>=2,"real directory deletion not observed");
    }
   });
-  Run("T4a asynchronous startup and explicit rebuild without live merge",()=>{
+  Run("T4a asynchronous startup and live merge without rebuild",()=>{
    string root=Fresh("inventory-startup"),a=Path.Combine(root,"a.bmp"),b=Path.Combine(root,"b.bmp");Bmp(a,Color.Red);string saved=File.Exists(SettingsFile)?File.ReadAllText(SettingsFile):null;
    File.WriteAllText(SettingsFile,new JavaScriptSerializer().Serialize(new MatteSettings{Playlist=new List<string>{root},SpatialFolder=Fresh("inventory-startup-store")}));
    using(var sink=new SlideSink()){var app=new App(new TestWall());app.presentSlide=sink.Show;
     try{app.TestInit();Until(()=>app.TestSnapshot!=null,"startup did not consume asynchronous inventory");Check(app.TestRotationSize==1,"startup rotation missing photo");
-     Bmp(b,Color.Blue);Until(()=>app.TestSources().Count==2,"watcher addition not exposed",8000);Check(app.TestRotationSize==1,"T4a merged a live addition");app.TestRebuildInventory();Check(app.TestRotationSize==2,"explicit rebuild ignored maintained set");
+      object rotation=app.TestRotationToken;int cursor=app.TestRotation;Bmp(b,Color.Blue);Until(()=>app.TestRotationSize==2,"watcher addition not merged",8000);Check(ReferenceEquals(rotation,app.TestRotationToken)&&app.TestRotation==cursor,"addition restarted rotation");app.TestRebuildInventory();Check(app.TestRotationSize==2,"explicit rebuild ignored maintained set");
     }finally{app.TestClose();if(saved==null)ClearSettings();else File.WriteAllText(SettingsFile,saved);}
    }
   });
@@ -322,9 +331,9 @@ static class MatteTests {
    var fs=new InventoryTestFS{BlockPath=root};fs.Put(a);fs.Put(b);var clock=new InventoryTestClock();var dispatcher=Dispatcher.CurrentDispatcher;
    var settings=new MatteSettings{Playlist=new List<string>{root},SpatialFolder=Fresh(start?"r17-start-store":"r17-edit-store")};string saved=File.Exists(SettingsFile)?File.ReadAllText(SettingsFile):null;
    using(var inv=new PlaylistInventory(fs,clock.Now,action=>dispatcher.BeginInvoke(action),null,false))using(var sink=new SlideSink()){
-    var wall=new TestWall{Wallpaper=a};var app=new App(wall){TestSettings=settings};app.presentSlide=sink.Show;app.TestInventory(inv,clock.Now);
+    var wall=new TestWall{Wallpaper=a};var app=new App(wall){TestSettings=settings};app.presentSlide=sink.Show;
     try{
-     if(!start){app.TestShow(a);Until(()=>app.TestSnapshot!=null,"initial photo did not present");}
+     if(!start){app.TestShow(a);Until(()=>app.TestSnapshot!=null,"initial photo did not present");}app.TestInventory(inv,clock.Now);
      DateTime countdown=DateTime.Now.AddMinutes(10);app.TestInventorySeed(start?null:a,start?new string[0]:new[]{a,b},new[]{b},new[]{b},countdown);
      object rotation=app.TestRotationToken,job=app.TestSlideWorkToken;string[] history=app.TestInventoryHistory;int wallChanges=wall.WallpaperSets,presentations=sink.Events.Count;
      if(start){File.WriteAllText(SettingsFile,new JavaScriptSerializer().Serialize(settings));app.TestInit();}else app.TestRebuildInventory();
@@ -358,8 +367,134 @@ static class MatteTests {
     try{app.TestInventoryUse();object before=app.TestRotationToken;inv.Tick();Check(fs.Entered.WaitOne(2000),"slow root not blocked");Until(()=>inv.Snapshot.Entries.Any(e=>e.Path==local&&e.Scanned),"local root blocked by network");
      clock.Add(1);inv.Tick();Until(()=>inv.Snapshot.ReadyPaths.Contains(a),"local file did not settle");app.TestInventoryPoll();Check(ReferenceEquals(before,app.TestRotationToken)&&wall.WallpaperSets==0,"unscanned revision did not preserve wallpaper during grace");
      clock.Add(2.1);app.TestInventoryPoll();Until(()=>app.TestSnapshot!=null,"slow root prevented local playback after grace");Check(app.TestRotationSize==1&&!inv.Snapshot.Scanned&&!app.TestEmpty,"partial start waited for slow root or showed empty");object once=app.TestRotationToken;
-     fs.Release.Set();InventoryIdle(inv);InventoryPass(inv,clock,1,false);Pump(30);app.TestInventoryPoll();Check(inv.Snapshot.ReadyPaths.Count==2&&ReferenceEquals(once,app.TestRotationToken)&&app.TestRotationSize==1,"late root restarted rotation instead of waiting for T4b");
+     fs.Release.Set();InventoryIdle(inv);InventoryPass(inv,clock,1,false);Pump(30);app.TestInventoryPoll();Check(inv.Snapshot.ReadyPaths.Count==2&&ReferenceEquals(once,app.TestRotationToken)&&app.TestRotationSize==2,"late root did not merge without restarting rotation");
     }finally{fs.Release.Set();app.TestClose();}
+   }
+  });
+ }
+
+ static InventorySnapshot RotationSnapshot(long sequence,string root,params string[] paths){return new InventorySnapshot(1,sequence,new[]{new InventoryEntry(root,true,true,paths.Select(p=>new InventoryPhoto(p,1,1,PhotoState.Ready,new DateTime(2026,1,1))),new Dictionary<string,InventoryAvailability>{{root,InventoryAvailability.Enumerated}})});}
+ static void RotationTests(){
+  Run("T4b shuffle interleaves uniformly including next slot",()=>{
+   var counts=new int[3];for(int seed=0;seed<2400;seed++){var files=new List<string>{"a","b","c","d"};int cursor=2;
+    RotationMerge.Apply(files,ref cursor,new[]{"a","b","c","d","new"},false,StringComparer.OrdinalIgnoreCase.Compare,new Random(seed));int at=files.IndexOf("new");
+    Check(at>=2&&at<=4&&cursor==2&&files.Where(p=>p!="new").SequenceEqual(new[]{"a","b","c","d"}),"shuffle altered played/remainder order or cursor");counts[at-2]++;
+   }Check(counts.All(n=>n>650&&n<950),"shuffle did not cover all inclusive slots uniformly: "+string.Join(",",counts));
+   var many=new List<string>{"a","b","c"};int next=1;RotationMerge.Apply(many,ref next,new[]{"a","b","c","x","y","z"},false,StringComparer.OrdinalIgnoreCase.Compare,new Random(7));Check(many.Where(p=>p=="a"||p=="b"||p=="c").SequenceEqual(new[]{"a","b","c"})&&many.Take(next).SequenceEqual(new[]{"a"}),"batch addition reshuffled existing photos");
+  });
+  Run("T4b sequential comparator uses playlist order before path",()=>{
+   string z=@"C:\z",a=@"C:\a",z1=z+@"\1.jpg",z2=z+@"\2.jpg",z3=z+@"\3.jpg",a1=a+@"\1.jpg";
+   var app=new App(new TestWall()){TestSettings=new MatteSettings{Order="sequential",Playlist=new List<string>{z,a}}};try{var files=new List<string>{z2,a1};int cursor=1;
+    RotationMerge.Apply(files,ref cursor,new[]{z2,a1,z1,z3},true,app.TestPhotoComparison(),new Random(1));Check(files.SequenceEqual(new[]{z1,z2,z3,a1})&&cursor==2,"sequential insertion ignored playlist order or before-cursor adjustment");
+    app.TestRotationSetup(files.ToArray(),cursor);Check(app.TestTakeCandidate()==z3&&app.TestTakeCandidate()==a1&&app.TestRotation==4,"after-cursor insertion missed this round");Check(app.TestTakeCandidate()==z1&&app.TestRotation==1,"before-cursor insertion did not wait for next round");
+   }finally{app.TestClose();}
+  });
+  Run("T4b boundary additions and second-round merges keep cursor bounded",()=>{
+   var app=new App(new TestWall()){TestSettings=new MatteSettings{Order="shuffle",Playlist=new List<string>{@"C:\photos"}}};try{
+    app.TestRotationSetup(new[]{"a","b"},2);var files=app.TestRotationPaths.ToList();int cursor=app.TestRotation;
+    RotationMerge.Apply(files,ref cursor,new[]{"a","b","new"},false,StringComparer.OrdinalIgnoreCase.Compare,new Random(4));app.TestRotationSetup(files.ToArray(),cursor);long round=app.TestRound;
+    Check(app.TestTakeCandidate()=="new"&&app.TestRound==round&&app.TestRotation==3,"boundary addition was deferred or skipped");
+    app.TestTakeCandidate();Check(app.TestRound==round+1&&app.TestRotation==1,"round boundary did not reset bounded cursor");
+    string[] second=app.TestRotationPaths;files=second.ToList();cursor=1;RotationMerge.Apply(files,ref cursor,second.Concat(new[]{"later"}),false,StringComparer.OrdinalIgnoreCase.Compare,new Random(9));
+    Check(files[0]==second[0]&&files.IndexOf("later")>=cursor&&files.Where(p=>p!="later").SequenceEqual(second),"second-round merge reshuffled played photos");
+    app.TestRotationSetup(files.ToArray(),cursor);for(int i=0;i<100;i++){Check(app.TestTakeCandidate()!=null,"rotation stalled");Check(app.TestRotation>=0&&app.TestRotation<=app.TestRotationSize,"cursor grew beyond round");}
+   }finally{app.TestClose();}
+  });
+  Run("T4b removals before at after cursor and last entry",()=>{
+   foreach(string gone in new[]{"a","c","d"}){var files=new List<string>{"a","b","c","d"};int cursor=2;RotationMerge.Apply(files,ref cursor,files.Where(p=>p!=gone).ToArray(),false,StringComparer.OrdinalIgnoreCase.Compare,new Random(1));
+    Check(cursor==(gone=="a"?1:2),"removal cursor adjustment wrong for "+gone);Check(files[cursor]==(gone=="c"?"d":"c"),"removal skipped next candidate");}
+   var last=new List<string>{"a"};int end=1;RotationMerge.Apply(last,ref end,new string[0],false,StringComparer.OrdinalIgnoreCase.Compare,new Random(1));Check(last.Count==0&&end==0,"last deletion left invalid boundary");
+  });
+  Run("T4b merges preserve Previous Next independently of cursor",()=>{
+   string root=Fresh("b-history"),a=Path.Combine(root,"a.bmp"),b=Path.Combine(root,"b.bmp"),c=Path.Combine(root,"c.bmp"),d=Path.Combine(root,"d.bmp");foreach(string p in new[]{a,b,c,d})Bmp(p,Color.Red);
+   using(var sink=new SlideSink()){var app=new App(new TestWall()){TestSettings=new MatteSettings{Order="sequential",Playlist=new List<string>{root},SpatialFolder=Fresh("b-history-store")}};app.presentSlide=sink.Show;
+    try{app.TestShow(b);Until(()=>sink.Image!=null,"current photo missing");app.TestInventorySeed(b,new[]{a,b,c},new[]{a},new string[0],app.TestCountdown);app.TestRotationSetup(new[]{a,b,c},2,RotationSnapshot(1,root,a,b,c));
+     app.TestPrevious();Until(()=>sink.Image.Source==a,"Previous missing");Check(app.TestRotation==2,"Previous rewound cursor");app.TestMerge(RotationSnapshot(2,root,a,b,c,d));int cursor=app.TestRotation;
+     app.TestInventoryAdvance();Until(()=>sink.Image.Source==b,"Next lost forward history");Check(app.TestRotation==cursor,"history replay consumed rotation");app.TestInventoryAdvance();Until(()=>sink.Image.Source==c,"next rotation candidate skipped");
+     app.TestMerge(RotationSnapshot(3,root,c,d));Check(!app.TestInventoryHistory.Contains(a)&&!app.TestInventoryHistory.Contains(b),"removed paths remained in history");
+    }finally{app.TestClose();}
+   }
+  });
+  Run("T4b removed current and last photo stay until next slide",()=>{
+   foreach(bool last in new[]{false,true}){string root=Fresh(last?"b-last":"b-current"),a=Path.Combine(root,"a.bmp"),b=Path.Combine(root,"b.bmp");Bmp(a,Color.Red);Bmp(b,Color.Blue);
+    using(var sink=new SlideSink()){var wall=new TestWall();var app=new App(wall){TestSettings=new MatteSettings{Order="sequential",Playlist=new List<string>{root},SpatialFolder=Fresh(last?"b-last-store":"b-current-store")}};app.presentSlide=sink.Show;
+     try{app.TestShow(a);Until(()=>sink.Image!=null,"current photo missing");string[] paths=last?new[]{a}:new[]{a,b};app.TestRotationSetup(paths,1,RotationSnapshot(1,root,paths));var image=app.TestSnapshot;DateTime countdown=app.TestCountdown;int shown=sink.Events.Count;
+      app.TestMerge(RotationSnapshot(2,root,last?new string[0]:new[]{b}));Check(ReferenceEquals(image,app.TestSnapshot)&&sink.Events.Count==shown&&!app.TestEmpty&&app.TestCountdown==countdown,"inventory removal immediately replaced current photo");
+      app.TestInventoryAdvance();if(last)Check(app.TestEmpty&&Path.GetFileName(wall.Wallpaper)=="matte-empty.png","last photo did not clear on next");else{Until(()=>sink.Image.Source==b,"removed current did not advance");Check(!app.TestInventoryHistory.Contains(a),"removed current returned to history");}
+     }finally{app.TestClose();}
+    }
+   }
+  });
+  Run("T4b same-path prefetch replacement reads new bytes",()=>{
+   string root=Fresh("b-prefetch"),a=Path.Combine(root,"a.bmp"),b=Path.Combine(root,"b.bmp");Bmp(a,Color.Red);Bmp(b,Color.Blue);var fs=new InventoryTestFS();fs.Put(a);fs.Put(b);var clock=new InventoryTestClock();var dispatcher=Dispatcher.CurrentDispatcher;
+   using(var inv=new PlaylistInventory(fs,clock.Now,act=>dispatcher.BeginInvoke(act),null,false))using(var sink=new SlideSink()){
+    var app=new App(new TestWall()){TestSettings=new MatteSettings{Order="sequential",Playlist=new List<string>{root},SpatialFolder=Fresh("b-prefetch-store")}};app.presentSlide=sink.Show;app.TestInventory(inv,clock.Now);
+    try{inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);Pump(30);app.TestRotationSetup(new[]{a,b},1,inv.Snapshot);app.TestShow(a);Until(()=>app.TestAheadDone,"prefetch not ready");var stale=app.TestAheadWork;string old=stale.Image.Digest;
+     Bmp(b,Color.Green);fs.Put(b,2);fs.Emit(root,b);Pump(30);InventoryPass(inv,clock,2,false);InventoryPass(inv,clock,1,false);Pump(30);
+     Check(app.TestRotationPaths.Count(p=>p==b)==1,"replacement duplicated path");app.TestInventoryAdvance();Until(()=>sink.Image.Source==b,"replacement did not show");Check(sink.Image.Digest!=old&&sink.Image.Digest==CatalogHash(File.ReadAllBytes(b)),"stale prefetched bytes delivered");
+    }finally{app.TestClose();}
+   }
+  });
+  Run("T4b removed pending delivery cannot replace displayed snapshot",()=>{
+   string root=Fresh("b-delivery"),a=Path.Combine(root,"a.bmp"),b=Path.Combine(root,"b.bmp");Bmp(a,Color.Red);Bmp(b,Color.Blue);var fs=new InventoryTestFS();fs.Put(a);fs.Put(b);var clock=new InventoryTestClock();var dispatcher=Dispatcher.CurrentDispatcher;
+   using(var entered=new System.Threading.ManualResetEventSlim())using(var release=new System.Threading.ManualResetEventSlim())using(var inv=new PlaylistInventory(fs,clock.Now,act=>dispatcher.BeginInvoke(act),null,false))using(var sink=new SlideSink()){
+    var app=new App(new TestWall()){TestSettings=new MatteSettings{Order="sequential",Playlist=new List<string>{root},SpatialFolder=Fresh("b-delivery-store")}};app.presentSlide=sink.Show;app.TestInventory(inv,clock.Now);
+    try{inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);Pump(30);app.TestRotationSetup(new[]{a,b},2,inv.Snapshot);app.TestShow(a);Until(()=>sink.Image!=null,"initial image missing");int count=sink.Events.Count;
+     app.beforeVerifyDelivery=v=>{if(v.Image.Source==b){entered.Set();release.Wait(5000);}};app.TestShow(b);Until(()=>entered.IsSet,"pending read not held");fs.Remove(b);fs.Emit(root,b);InventoryPass(inv,clock,2,false);Pump(30);release.Set();Pump(150);
+     Check(sink.Events.Count==count&&sink.Image.Source==a,"removed pending work was presented");
+    }finally{release.Set();app.TestClose();}
+   }
+  });
+  Run("T4b decode failure skips once and retries next round",()=>{
+   string root=Fresh("b-decode"),bad=Path.Combine(root,"a.bmp"),good=Path.Combine(root,"b.bmp");File.WriteAllBytes(bad,new byte[]{66,77,0,0});Bmp(good,Color.Blue);
+   using(var sink=new SlideSink()){var wall=new TestWall{Wallpaper=good};var app=new App(wall){TestSettings=new MatteSettings{Order="sequential",Playlist=new List<string>{root}}};app.presentSlide=sink.Show;
+    try{app.TestRotationSetup(new[]{bad,good},0,RotationSnapshot(1,root,bad,good));app.TestInventoryAdvance();Until(()=>sink.Image!=null&&sink.Image.Source==good,"decode failure did not skip to next photo");Check(app.TestRotation==2&&!app.TestEmpty&&!app.TestInventoryHistory.Contains(bad),"failed photo entered history or emptied rotation");
+     Bmp(bad,Color.Green);app.TestInventoryAdvance();Until(()=>sink.Image.Source==bad,"failed photo not retried next round");Check(app.TestRotation==1,"retry cursor wrong");
+    }finally{app.TestClose();}
+   }
+  });
+  Run("T4b delivery checks snapshot before queued inventory notification",()=>{
+   string root=Fresh("b-delivery-race"),a=Path.Combine(root,"a.bmp"),b=Path.Combine(root,"b.bmp");Bmp(a,Color.Red);Bmp(b,Color.Blue);var fs=new InventoryTestFS();fs.Put(a);fs.Put(b);var clock=new InventoryTestClock();var posts=new System.Collections.Concurrent.ConcurrentQueue<Action>();
+   using(var inv=new PlaylistInventory(fs,clock.Now,posts.Enqueue,null,false))using(var sink=new SlideSink())using(var entered=new System.Threading.ManualResetEventSlim())using(var release=new System.Threading.ManualResetEventSlim()){
+    var app=new App(new TestWall()){TestSettings=new MatteSettings{Order="sequential",Playlist=new List<string>{root}}};app.presentSlide=sink.Show;app.TestInventory(inv,clock.Now);
+    try{inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);Action action;while(posts.TryDequeue(out action))action();app.TestRotationSetup(new[]{a,b},2,inv.Snapshot);app.TestShow(a);Until(()=>sink.Image!=null,"initial photo missing");int shown=sink.Events.Count;
+     app.beforeVerifyDelivery=v=>{if(v.Image.Source==b){entered.Set();release.Wait(5000);}};app.TestShow(b);Until(()=>entered.IsSet,"delivery barrier missing");fs.Remove(b);fs.Emit(root,b);InventoryPass(inv,clock,2,false);release.Set();Pump(150);
+     Check(posts.Count>0&&sink.Events.Count==shown&&sink.Image.Source==a,"stale delivery won race with inventory callback");while(posts.TryDequeue(out action))action();
+    }finally{release.Set();app.TestClose();}
+   }
+  });
+  Run("T4b changed displayed photo stays through catalogue reload",()=>{
+   string root=Fresh("b-displayed-change"),a=Path.Combine(root,"a.bmp"),store=Fresh("b-displayed-change-store");Bmp(a,Color.Red);CatalogPair(store,a);var fs=new InventoryTestFS();fs.Put(a);var clock=new InventoryTestClock();var dispatcher=Dispatcher.CurrentDispatcher;
+   using(var inv=new PlaylistInventory(fs,clock.Now,act=>dispatcher.BeginInvoke(act),null,false))using(var sink=new SlideSink()){
+    var app=AttachApp(store,sink,a);app.TestSettings.Playlist=new List<string>{root};app.TestInventory(inv,clock.Now);
+    try{inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);Pump(30);app.TestRotationSetup(new[]{a},1,inv.Snapshot);app.TestShow(a);Until(()=>sink.Events.Contains("3d:"+a),"initial Spatial missing");string digest=sink.Image.Digest;int shown=sink.Events.Count;DateTime countdown=app.TestCountdown;
+     Bmp(a,Color.Blue);fs.Put(a,2);fs.Emit(root,a);InventoryPass(inv,clock,2,false);InventoryPass(inv,clock,1,false);Pump(30);Until(()=>!app.TestCatalogLoading,"replacement catalogue pending",8000);
+     Check(sink.Events.Count==shown&&sink.Image.Digest==digest&&!app.TestFlat&&app.TestCountdown==countdown,"changed current snapshot replaced before next slide");app.TestInventoryAdvance();Until(()=>sink.Image.Digest!=digest,"next showing did not read changed bytes");Check(app.TestRotationSize==1,"changed source duplicated");
+    }finally{app.TestClose();}
+   }
+  });
+  Run("T4b a formerly unready photo joins when locally ready",()=>{
+   string root=Fresh("b-readiness"),a=Path.Combine(root,"a.bmp"),b=Path.Combine(root,"b.bmp");Bmp(a,Color.Red);Bmp(b,Color.Blue);var fs=new InventoryTestFS();fs.Put(a);fs.Put(b,1,(FileAttributes)0x1000);var clock=new InventoryTestClock();var dispatcher=Dispatcher.CurrentDispatcher;
+   using(var inv=new PlaylistInventory(fs,clock.Now,act=>dispatcher.BeginInvoke(act),null,false)){
+    var app=new App(new TestWall()){TestSettings=new MatteSettings{Playlist=new List<string>{root}}};app.TestInventory(inv,clock.Now);
+    try{inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);Pump(30);app.TestRotationSetup(new[]{a},1,inv.Snapshot);long round=app.TestRound;fs.Put(b,2);fs.Emit(root,b);InventoryPass(inv,clock,2,false);InventoryPass(inv,clock,1,false);Pump(30);
+     Check(app.TestRotationSize==2&&app.TestTakeCandidate()==b&&app.TestRound==round,"rehydrated source missed unplayed boundary");
+    }finally{app.TestClose();}
+   }
+  });
+  Run("T4b all failed candidates keep wallpaper and stop at boundary",()=>{
+   string root=Fresh("b-all-failed"),a=Path.Combine(root,"a.bmp");File.WriteAllBytes(a,new byte[]{66,77});var wall=new TestWall{Wallpaper="existing"};var app=new App(wall){TestSettings=new MatteSettings{Playlist=new List<string>{root}}};
+   try{app.TestRotationSetup(new[]{a},0,RotationSnapshot(1,root,a));app.TestInventoryAdvance();Until(()=>app.TestCurrentWork==null&&app.TestRotation==1,"failed request did not finish");Pump(100);Check(wall.Wallpaper=="existing"&&!app.TestEmpty&&app.TestRotation==1,"failure looped or showed empty");}finally{app.TestClose();}
+  });
+  Run("T4b renamed source reuses Spatial and removed current remains 3D",()=>{
+   string root=Fresh("b-rename"),a=Path.Combine(root,"a.bmp"),b=Path.Combine(root,"renamed.bmp"),store=Fresh("b-rename-store");Bmp(a,Color.Red);string pair=CatalogPair(store,a);var fs=new InventoryTestFS();fs.Put(a);var clock=new InventoryTestClock();var dispatcher=Dispatcher.CurrentDispatcher;
+   using(var inv=new PlaylistInventory(fs,clock.Now,act=>dispatcher.BeginInvoke(act),null,false))using(var sink=new SlideSink()){
+    var app=AttachApp(store,sink,a);app.TestSettings.Playlist=new List<string>{root};app.TestInventory(inv,clock.Now);
+    try{inv.Configure(new[]{root});InventoryPass(inv,clock);InventoryPass(inv,clock,1);Pump(30);app.TestRotationSetup(new[]{a},1,inv.Snapshot);app.TestShow(a);Until(()=>sink.Events.Contains("3d:"+a),"initial Spatial missing");int count=sink.Events.Count;DateTime countdown=app.TestCountdown;
+     File.Move(a,b);fs.Remove(a);fs.Put(b);fs.Emit(root,b,a);InventoryPass(inv,clock,2,false);InventoryPass(inv,clock,1,false);Pump(30);
+     Until(()=>!app.TestCatalogLoading&&app.TestSpatialPath(b)==pair,"debounced rename catalogue did not reuse content pair",8000);
+     Check(sink.Events.Count==count&&!app.TestFlat&&app.TestCountdown==countdown&&sink.Image.Source==a,"catalogue reload replaced removed current photo");app.TestInventoryAdvance();Until(()=>sink.Events.Contains("3d:"+b),"renamed photo lost Spatial without generation");
+    }finally{app.TestClose();}
    }
   });
  }
@@ -368,6 +503,7 @@ static class MatteTests {
   if(args.Length>=2&&(args[0]=="--native-validate"||args[0]=="--native-fault"))return NativeChild(args);
   if(args.Contains("--native")){NativeTests();return failures;}
   if(args.Contains("--inventory-wait")){InventoryWaitTests();return failures;}
+  if(args.Contains("--rotation")){RotationTests();return failures;}
   if(args.Contains("--inventory")){InventoryTests();InventoryWaitTests();return failures;}
   if(args.Length==3&&args[0]=="--hold-lock"){using(SpatialStoreLock.Acquire(args[1],3000)){Console.WriteLine("LOCKED");Console.Out.Flush();System.Threading.Thread.Sleep(int.Parse(args[2]));}return 0;}
   if(args.Contains("--format")){FormatTests();return failures;}
@@ -380,7 +516,7 @@ static class MatteTests {
   if(args.Contains("--retention")){RetentionTests();return failures;}
   if(args.Contains("--store-page")){StorePageTests();return failures;}
   IdentityTests();if(args.Contains("--identity"))return failures;
-  InventoryTests();InventoryWaitTests();StoreTests();
+  InventoryTests();InventoryWaitTests();RotationTests();StoreTests();
   LockTests();
   CatalogTests();NativeTests();AttachTests();FallbackTests();CacheTests();RetentionTests();StorePageTests();
   // ② the store page's sweep runs once, not again and again

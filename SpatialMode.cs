@@ -18,11 +18,21 @@ partial class App {
  List<Tuple<string,List<string>>> catalogEntries;SpatialCatalog spatialCatalog;int catalogRequest;bool catalogLoading;
  readonly SpatialCatalog.RecipeCache desiredRecipe=new SpatialCatalog.RecipeCache();
  static readonly object catalogGate=new object(); // One hashing worker, including superseded requests.
+ System.Windows.Threading.DispatcherTimer inventoryCatalogTimer;DateTime inventoryCatalogFirst,inventoryCatalogLast;
+ void QueueInventoryCatalog(){
+  System.Threading.Interlocked.Increment(ref catalogRequest);catalogLoading=true;inventoryCatalogLast=DateTime.UtcNow;
+  if(inventoryCatalogTimer!=null)return;inventoryCatalogFirst=inventoryCatalogLast;
+  inventoryCatalogTimer=new System.Windows.Threading.DispatcherTimer{Interval=TimeSpan.FromMilliseconds(200)};
+  inventoryCatalogTimer.Tick+=delegate{var now=DateTime.UtcNow;if((now-inventoryCatalogLast).TotalSeconds>=2||(now-inventoryCatalogFirst).TotalSeconds>=15){StopInventoryCatalog();LoadSpatialCatalog();}};inventoryCatalogTimer.Start();
+ }
+ void StopInventoryCatalog(){if(inventoryCatalogTimer!=null){inventoryCatalogTimer.Stop();inventoryCatalogTimer=null;}}
  void LoadSpatialCatalog(){
+  StopInventoryCatalog();
   int request=System.Threading.Interlocked.Increment(ref catalogRequest);catalogLoading=true;
   // Keep the last catalogue until its replacement is ready; a recount must not flatten the current slide.
   string[] reset=resetHints.ToArray(),recheck=artifactRechecks.ToArray();
   string store=SpatialCacheDir;string[] entries=PlaylistEntries().ToArray();
+  var per=SpatialPhotoEntries(entries); // Capture the maintained snapshot on the UI thread; no directory walk.
   bool installed=!CustomGenerator&&SharpInstalled,describe=panel!=null;
   var screen=System.Windows.Forms.Screen.PrimaryScreen.Bounds;var dispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;
   Func<bool> cancelled=()=>System.Threading.Volatile.Read(ref catalogRequest)!=request;
@@ -32,7 +42,7 @@ partial class App {
    try{
     string desired=describe?desiredRecipe.Resolve(SharpModel,screen.Width,screen.Height,installed,()=>SpatialCatalog.Describe(OwnGenerator)):null;
     if(cancelled())return;
-    var per=SpatialPhotoEntries(entries);var photos=per.SelectMany(x=>x.Item2).ToList();
+    var photos=per.SelectMany(x=>x.Item2).ToList();
     var hinted=SpatialCatalog.Load(store,photos,desired);
     hinted.RecheckArtifacts(recheck);
     foreach(string path in reset)hinted.DropHint(path);
@@ -66,7 +76,7 @@ partial class App {
    LoadSpatialCatalog();
    if(spatialEnabled==enabled)return;
    spatialEnabled=enabled;Theme.AtomicWrite(Path.Combine(Dir,"spatial-enabled.txt"),enabled?"1":"0");
-   if(aheadJob!=null){aheadJob.Dispose();aheadJob=null;}currentMismatch=false;fade.Stop();ReevaluateCurrentSpatial();
+   if(aheadJob!=null){aheadJob.Dispose();aheadJob=null;}currentMismatch=false;fade.Stop();ReevaluateCurrentSpatial(true);
    Log("Spatial mode "+(enabled?"on":"off")+"; slides="+slideFiles.Count);
   }catch(Exception e){spatialEnabled=previous;Theme.AtomicWrite(Path.Combine(Dir,"spatial-enabled.txt"),previous?"1":"0");Log("Spatial toggle: "+e.Message);}
  }

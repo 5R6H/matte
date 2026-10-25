@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using System.Runtime.CompilerServices;
 using System.Windows.Forms;
 
 partial class App {
@@ -21,36 +22,56 @@ partial class App {
  }
  static bool SamePair(SpatialIdentity.Pair a,SpatialIdentity.Pair b){return a==null?b==null:b!=null&&a.SourceSha==b.SourceSha&&a.RecipeSha==b.RecipeSha&&a.Artifact==b.Artifact&&SpatialContent.Digest(a)==SpatialContent.Digest(b);}
  internal IPhotoFileSystem prefetchFiles=new PhotoFileSystem();
+ sealed class SourceVersion {internal InventoryPhoto Photo;}
+ readonly ConditionalWeakTable<SlideJob,SourceVersion> sourceVersions=new ConditionalWeakTable<SlideJob,SourceVersion>();long navigationSerial;
+ bool SourceWorkCurrent(SlideJob job){SourceVersion version;if(!sourceVersions.TryGetValue(job,out version))return true;
+  var a=version.Photo;var b=InventoryPhotoFor(job.Path);return a!=null&&b!=null&&b.State==PhotoState.Ready&&a.Size==b.Size&&a.Mtime==b.Mtime&&a.Observed==b.Observed;
+ }
+ void DiscardPendingSlide(SlideJob job){if(ReferenceEquals(slideJob,job)){StopVerifyTimer();slideJob=null;navigationSerial++;rememberAfterPresentation=null;currentSourcePath=currentImage==null?null:currentImage.Source;if(currentImage!=null)holdInventoryDisplay=true;}job.Dispose();}
+ void InvalidateInventoryJobs(){
+  if(aheadJob!=null&&!SourceWorkCurrent(aheadJob)){aheadJob.Dispose();aheadJob=null;}
+  if(slideJob!=null&&!slideJob.Finished&&!SourceWorkCurrent(slideJob))DiscardPendingSlide(slideJob);
+ }
  SlideJob MakeSlideJob(string path,SlideSnapshot reuse,bool prefetch=false){
   var job=new SlideJob(++slideRequest,path,BackgroundMode,AmbientScreen,PairFor(path),HintFor(path));var dispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;
+  if(photoInventory!=null)sourceVersions.Add(job,new SourceVersion{Photo=InventoryPhotoFor(path)});
   var colors=new Dictionary<string,uint>(overrides,StringComparer.OrdinalIgnoreCase);
   Action changed=()=>{try{if(dispatcher.HasShutdownStarted){job.Dispose();return;}dispatcher.BeginInvoke(new Action(()=>{if(ReferenceEquals(job,slideJob))SlideProgress(job);else if(!ReferenceEquals(job,aheadJob))job.Dispose();}));}catch{job.Dispose();}};
-  job.Start(()=>{var image=reuse==null?new SlideSnapshot(path,prefetch?PhotoReadPolicy.Read(prefetchFiles,path):File.ReadAllBytes(path)):reuse.Copy();try{image.MakeDisplay(DisplayCacheDir);uint color;
+  job.Start(()=>{if(!SourceWorkCurrent(job))throw new IOException("Photo changed before read");if(reuse==null&&!prefetch)PhotoReadPolicy.Demand(path);
+   var image=reuse==null?new SlideSnapshot(path,prefetch?PhotoReadPolicy.Read(prefetchFiles,path):File.ReadAllBytes(path)):reuse.Copy();try{
+    if(reuse==null)image.Pixels(); // Reject incomplete/invalid image data on the worker, before a wallpaper request.
+    image.MakeDisplay(DisplayCacheDir);uint color;
     image.Color=colors.TryGetValue(path,out color)||colors.TryGetValue(image.Display,out color)?color:AutoColor(image.Display);return image;}catch{image.Dispose();throw;}},
    image=>{string backdrop;image.Wallpaper=WallpaperImage(image,job.Mode,job.Screen,out backdrop);image.Backdrop=backdrop;},changed,verified=>{if(job.Cancelled)return;var image=verified.Image;if((verified.Pair!=null||verified.ArtifactInvalid)&&image.Wallpaper==image.Display){image.MakeDisplay(DisplayCacheDir,true);image.Wallpaper=image.Display;}
     if(beforeVerifyDelivery!=null)beforeVerifyDelivery(verified);});
   return job;
  }
  void BeginSlide(string path,bool keepTimer,SlideSnapshot reuse=null){
+  navigationSerial++;
   if(slideJob!=null)slideJob.Dispose();slideJob=null;StopVerifyTimer();
   currentSourcePath=path;showingEmpty=false;shownFlat=spatialFlat;currentMismatch=false;currentFailedDigest=null;verificationRefresh=false;
   if(!keepTimer)nextSlide=DateTime.Now.AddMilliseconds(settings.Interval);
   var pair=PairFor(path);
-  if(reuse==null&&aheadJob!=null&&aheadJob.Path==path&&aheadJob.Mode==BackgroundMode&&aheadJob.Screen==AmbientScreen&&SamePair(aheadJob.Candidate,pair)&&aheadJob.HintDigest==HintFor(path)){
+  if(reuse==null&&aheadJob!=null&&SourceWorkCurrent(aheadJob)&&aheadJob.Path==path&&aheadJob.Mode==BackgroundMode&&aheadJob.Screen==AmbientScreen&&SamePair(aheadJob.Candidate,pair)&&aheadJob.HintDigest==HintFor(path)){
    slideJob=aheadJob;aheadJob=null;slideJob.Deadline=DateTime.UtcNow.AddSeconds(2);
   }else{if(aheadJob!=null){aheadJob.Dispose();aheadJob=null;}slideJob=MakeSlideJob(path,reuse);}
   var job=slideJob;verifyTimer=new System.Windows.Forms.Timer{Interval=2000};verifyTimer.Tick+=delegate{SlideProgress(job);if(!CurrentSlideJob(job)||job.Finished||job.Presented)StopVerifyTimer();else if(verifyTimer!=null)verifyTimer.Interval=10;};verifyTimer.Start();SlideProgress(job);
  }
  void StopVerifyTimer(){if(verifyTimer!=null){verifyTimer.Stop();verifyTimer.Dispose();verifyTimer=null;}}
- void CancelSlideRequests(){StopVerifyTimer();if(slideJob!=null)slideJob.Dispose();if(aheadJob!=null)aheadJob.Dispose();slideJob=aheadJob=null;shownPair=null;spatialLoad=null;}
- bool CurrentSlideJob(SlideJob job){return ReferenceEquals(job,slideJob)&&!job.Cancelled&&currentSourcePath==job.Path;}
+ void CancelSlideRequests(){navigationSerial++;rememberAfterPresentation=null;StopVerifyTimer();if(slideJob!=null)slideJob.Dispose();if(aheadJob!=null)aheadJob.Dispose();slideJob=aheadJob=null;shownPair=null;spatialLoad=null;}
+ bool CurrentSlideJob(SlideJob job){return ReferenceEquals(job,slideJob)&&!job.Cancelled&&currentSourcePath==job.Path&&SourceWorkCurrent(job);}
  void SlideProgress(SlideJob job){
-  if(!CurrentSlideJob(job)){job.Dispose();return;}
+  if(!CurrentSlideJob(job)){if(ReferenceEquals(job,slideJob))DiscardPendingSlide(job);else job.Dispose();return;}
   if(job.Finished)return;
   if(job.Done){StopVerifyTimer();job.Finished=true;var result=job.Take();
-   if(result==null){if(job.Error!=null)Log("Slide preparation: "+job.Error.Message);return;}
+   if(result==null){if(job.Error!=null)Log("Slide preparation: "+job.Error.Message);
+    if(job.Presented){holdInventoryDisplay=true;return;}
+    failedThisRound.Add(job.Path);DiscardPendingSlide(job);long request=navigationSerial;
+    System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(new Action(()=>{if(navigationSerial==request&&slideJob==null)AdvanceSlide(false);}));return;
+   }
    try{
-    if(result.Pair!=null&&(!CurrentSlideJob(job)||!spatialEnabled||spatialFlat||spatialPaused||!SamePair(result.Pair,PairFor(job.Path)))){result.Dispose();result.Pair=null;}
+    if(!CurrentSlideJob(job)){DiscardPendingSlide(job);return;}
+    if(result.Pair!=null&&(!spatialEnabled||spatialFlat||spatialPaused||!SamePair(result.Pair,PairFor(job.Path)))){result.Dispose();result.Pair=null;}
     PresentSnapshot(result.Image,result,!job.Presented);job.Presented=true;
     if(result.SourceMismatch||result.ArtifactInvalid)HealSpatial(result);
    }finally{result.Dispose();}
@@ -59,6 +80,7 @@ partial class App {
   if(!job.Presented&&DateTime.UtcNow>=job.Deadline&&job.Image!=null){PresentSnapshot(job.Image,null,true);job.Presented=true;}
  }
  void PresentSnapshot(SlideSnapshot image,SpatialVerification verified,bool first){
+  if(first){CommitRemember(image.Source);holdInventoryDisplay=false;}
   var pin=image.PinDisplay();if(previousDisplay!=null)previousDisplay.Dispose();previousDisplay=currentDisplay;currentDisplay=pin;
   bool newPhoto=currentImage==null||currentImage.Source!=image.Source;currentImage=image;
   bool spatial=verified!=null&&verified.Pair!=null&&verified.HasHandle;
@@ -82,7 +104,8 @@ partial class App {
   LoadSpatialCatalog();
  }
  // Only the current request changes. A catalogue refresh never rebuilds the rotation or resets its countdown.
- void ReevaluateCurrentSpatial(){
+ void ReevaluateCurrentSpatial(bool explicitChange=false){
+  if(!explicitChange&&holdInventoryDisplay&&currentImage!=null&&currentSourcePath==currentImage.Source)return;
   if(currentSourcePath==null||currentMismatch||verificationRefresh)return;var pair=PairFor(currentSourcePath);
   if(pair!=null&&currentFailedDigest!=null&&currentFailedDigest==SpatialContent.Digest(pair))return;
   if(SamePair(shownPair,pair)&&(pair!=null||slideJob==null||slideJob.Finished))return;
@@ -115,7 +138,9 @@ partial class App {
   rejectionWork=Task.Run(()=>{try{SpatialBad.Save(store,records);SpatialBad.Quarantine(store,Log);}catch(Exception e){Log("Spatial rejection cache: "+e.Message);}});
  }
  void PrepareNextSlide(){
-  if(slideFiles.Count==0)return;string next=slideAhead.Count>0?slideAhead[slideAhead.Count-1]:slideFiles[slideIndex%slideFiles.Count];
+  if(slideFiles.Count==0||slideAhead.Count==0&&slideIndex==slideFiles.Count)return;
+  string next=slideAhead.Count>0?slideAhead[slideAhead.Count-1]:slideFiles[slideIndex];
+  if(!SourceReady(next)||failedThisRound.Contains(next))return;
   if(next==currentSourcePath)return; // Do not retain an old snapshot of a single-photo rotation across edits.
   if(aheadJob!=null)aheadJob.Dispose();aheadJob=MakeSlideJob(next,null,true);
  }

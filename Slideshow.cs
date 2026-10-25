@@ -67,12 +67,12 @@ partial class App {
  void SyncPhotoInventory(){
   if(photoInventory==null){inventoryDispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;
    photoInventory=new PlaylistInventory(new PhotoFileSystem(),()=>DateTime.UtcNow,a=>{if(!inventoryDispatcher.HasShutdownStarted)inventoryDispatcher.BeginInvoke(a);},Path.Combine(Dir,"excluded-folders.txt"));
-   photoInventory.Changed+=c=>CompleteInventoryRefresh();
+   photoInventory.Changed+=OnInventoryChanged;
   }
   if(!inventoryDispatcher.CheckAccess())return;
   long before=photoInventory.Snapshot.Revision,after=photoInventory.Configure(PlaylistEntries());if(before!=after)WaitForInventory(after);
  }
- void DisposePhotoInventory(){if(photoInventory!=null)photoInventory.Dispose();}
+ void DisposePhotoInventory(){StopInventoryCatalog();System.Threading.Interlocked.Increment(ref catalogRequest);if(photoInventory!=null)photoInventory.Dispose();}
  MessageWindow ui;MatteSettings settings;DateTime nextSlide=DateTime.MaxValue;List<string> slideFiles=new List<string>();int slideIndex=0;Random random=new Random();
  static JavaScriptSerializer json=new JavaScriptSerializer();
  string SettingsFile{get{return Path.Combine(Dir,"settings.json");}}
@@ -115,25 +115,32 @@ partial class App {
  // Spatial 3D is a preference for the whole list, not a filter: every photo plays, in 3D when it has an up-to-date
  // Spatial file and Spatial is on, flat otherwise. SpatialPlays = some photo in the list will actually show in 3D.
  bool SpatialPlays{get{return spatialEnabled&&spatialSlides.Count>0;}}
- bool Playable(string p){return File.Exists(p);}
+ bool Playable(string p){return SourceReady(p)&&File.Exists(p);}
  bool TryRotationFiles(out List<string> files){
   SyncPhotoInventory();var snapshot=photoInventory.Snapshot;files=null;
   if(!CanUseInventory(snapshot)){WaitForInventory(snapshot.Revision);return false;}
-  var scanned=new HashSet<string>(snapshot.Entries.Where(e=>e.Scanned).SelectMany(e=>e.Members.Select(p=>p.Path)),StringComparer.OrdinalIgnoreCase);
-  files=new List<string>();foreach(string path in snapshot.ReadyPaths)if(snapshot.Scanned||scanned.Contains(path))files.Add(path);
-  // Only an explicit rebuild or its pending completion gets here; later root arrivals belong to T4b.
+  files=InventoryReady(snapshot);AcceptRotationInventory(snapshot);
   inventoryRefresh=-1;LoadSpatialCatalog();return true;
  }
- void Remember(string next){if(currentSourcePath!=null&&!string.Equals(currentSourcePath,next,StringComparison.OrdinalIgnoreCase)){slideBack.Add(currentSourcePath);if(slideBack.Count>100)slideBack.RemoveAt(0);}}
- void AdvanceSlide(){
+ string rememberAfterPresentation;
+ void Remember(string next){string shown=currentImage==null?currentSourcePath:currentImage.Source;
+  rememberAfterPresentation=shown!=null&&HistoryMember(shown)&&!string.Equals(shown,next,StringComparison.OrdinalIgnoreCase)?shown:null;
+ }
+ void CommitRemember(string shown){string previous=rememberAfterPresentation;rememberAfterPresentation=null;
+  if(previous!=null&&HistoryMember(previous)&&!string.Equals(previous,shown,StringComparison.OrdinalIgnoreCase)&&(slideBack.Count==0||!string.Equals(slideBack[slideBack.Count-1],previous,StringComparison.OrdinalIgnoreCase))){slideBack.Add(previous);if(slideBack.Count>100)slideBack.RemoveAt(0);}
+ }
+ void AdvanceSlide(){AdvanceSlide(true);}
+ void AdvanceSlide(bool allowNewRound){
   if(inventoryRefresh>=0)return; // Waiting must not consume history, reset the countdown, or show the empty wallpaper.
-  while(slideAhead.Count>0){string p=slideAhead[slideAhead.Count-1];slideAhead.RemoveAt(slideAhead.Count-1);if(Playable(p)){Remember(p);ShowSlide(p);return;}}
-  for(int tries=0;tries<slideFiles.Count;tries++){string path=slideFiles[slideIndex++%slideFiles.Count];if(!Playable(path))continue;Remember(path);ShowSlide(path);return;}
+  while(slideAhead.Count>0){string p=slideAhead[slideAhead.Count-1];slideAhead.RemoveAt(slideAhead.Count-1);if(!failedThisRound.Contains(p)&&Playable(p)){Remember(p);ShowSlide(p);return;}}
+  string path;bool wrap=allowNewRound;
+  while((path=TakeRotationCandidate(wrap))!=null){wrap=false;if(failedThisRound.Contains(path)||!Playable(path)){failedThisRound.Add(path);continue;}Remember(path);ShowSlide(path);return;}
   // Nothing playable (playlist emptied or its files gone): the photo on screen stays and it tries again next time.
-  if(slideFiles.Count==0){ShowEmpty();return;}
-  Log("Slideshow: nothing playable in the playlist; staying on the current photo");nextSlide=DateTime.Now.AddMilliseconds(settings.Interval);}
+  if(slideFiles.Count==0&&InventoryEmpty()){ShowEmpty();return;}
+  Log("Slideshow: nothing playable in the playlist; staying on the current photo");RetryNextRound();}
  void PreviousSlide(){
-  while(slideBack.Count>0){string p=slideBack[slideBack.Count-1];slideBack.RemoveAt(slideBack.Count-1);if(!Playable(p))continue;if(currentSourcePath!=null)slideAhead.Add(currentSourcePath);ShowSlide(p);return;}}
+  rememberAfterPresentation=null;
+  while(slideBack.Count>0){string p=slideBack[slideBack.Count-1];slideBack.RemoveAt(slideBack.Count-1);if(!Playable(p))continue;string shown=currentImage==null?currentSourcePath:currentImage.Source;if(shown!=null&&HistoryMember(shown))slideAhead.Add(shown);ShowSlide(p);return;}}
  void ShowSlide(string path){BeginSlide(path,false);}
  // Every 2 s (App.Check): a second start of Matte asks for the panel (show.request), and the next photo when it is due.
  void CheckRequests(){

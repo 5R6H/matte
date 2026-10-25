@@ -104,10 +104,11 @@ partial class App {
  bool Sequential{get{return settings!=null&&settings.Order=="sequential";}}
  void ArrangeRotation(List<string> files){
   if(!Sequential){for(int i=files.Count-1;i>0;i--){int j=random.Next(i+1);string t=files[i];files[i]=files[j];files[j]=t;}return;}
-  var entries=PlaylistEntries().ToList();
+  files.Sort(PhotoComparison());
+ }
+ Comparison<string> PhotoComparison(){var entries=PlaylistEntries().ToList();
   Func<string,int> entryOf=p=>{for(int i=0;i<entries.Count;i++)if(IsUnder(p,entries[i]))return i;return entries.Count;};
-  var keyed=files.Select(p=>new{p,e=entryOf(p)}).OrderBy(x=>x.e).ThenBy(x=>x.p,StringComparer.OrdinalIgnoreCase).Select(x=>x.p).ToList();
-  files.Clear();files.AddRange(keyed);
+  return (a,b)=>{int entry=entryOf(a).CompareTo(entryOf(b));return entry!=0?entry:StringComparer.OrdinalIgnoreCase.Compare(a,b);};
  }
  void SetOrder(string order){settings.Order=order;SaveSettings();try{RebuildSlides();}catch(Exception e){Log("Order: "+e.Message);}}
  // Image count of one entry (a folder with its subfolders, or 1), for the panel.
